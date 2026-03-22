@@ -41,5 +41,9 @@
 *.dwo
 
 _build/
+_build_vcpkg/
 build
 logs/
+_edgar_ref/
+vcpkg_installed/
+imgui.ini

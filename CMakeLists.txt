@@ -1,8 +1,4 @@
 cmake_minimum_required(VERSION 3.20)
-# Allow FetchContent_Populate for imgui (no root CMakeLists in upstream)
-if(POLICY CMP0169)
-  cmake_policy(SET CMP0169 OLD)
-endif()
 
 project(ImguiPlayground VERSION 0.1.0 LANGUAGES CXX)
 

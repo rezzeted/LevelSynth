@@ -1,0 +1,95 @@
+#pragma once
+
+#include <map>
+#include <optional>
+#include <stdexcept>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "edgar/generator/common/room_template_repeat_mode.hpp"
+#include "edgar/generator/grid2d/room_description_grid2d.hpp"
+#include "edgar/graphs/undirected_graph.hpp"
+
+namespace edgar::generator::grid2d {
+
+template <typename TRoom>
+class LevelDescriptionGrid2D {
+public:
+    std::string name;
+    int minimum_room_distance = 0;
+    std::optional<RoomTemplateRepeatMode> room_template_repeat_mode_default = RoomTemplateRepeatMode::NoRepeat;
+    std::optional<RoomTemplateRepeatMode> room_template_repeat_mode_override;
+
+    void add_room(const TRoom& room, const RoomDescriptionGrid2D& room_description) {
+        if (rooms_.count(room)) {
+            throw std::invalid_argument("Map description already contains this room");
+        }
+        rooms_.emplace(room, room_description);
+    }
+
+    void add_connection(const TRoom& room1, const TRoom& room2) {
+        if (!rooms_.count(room1)) {
+            throw std::invalid_argument("Map description does not contain room1");
+        }
+        if (!rooms_.count(room2)) {
+            throw std::invalid_argument("Map description does not contain room2");
+        }
+        const Passage p{room1, room2};
+        for (const auto& e : passages_) {
+            if (e == p) {
+                throw std::invalid_argument("Map description already contains given connection");
+            }
+        }
+        passages_.push_back(p);
+    }
+
+    const std::map<TRoom, RoomDescriptionGrid2D>& rooms() const { return rooms_; }
+
+    const RoomDescriptionGrid2D& get_room_description(const TRoom& room) const { return rooms_.at(room); }
+
+    graphs::UndirectedAdjacencyListGraph<TRoom> get_graph() const {
+        graphs::UndirectedAdjacencyListGraph<TRoom> graph;
+        for (const auto& kv : rooms_) {
+            graph.add_vertex(kv.first);
+        }
+        for (const auto& passage : passages_) {
+            graph.add_edge(passage.a, passage.b);
+        }
+        check_if_valid(graph);
+        return graph;
+    }
+
+private:
+    struct Passage {
+        TRoom a;
+        TRoom b;
+        bool operator==(const Passage& o) const {
+            return (a == o.a && b == o.b) || (a == o.b && b == o.a);
+        }
+    };
+
+    void check_if_valid(const graphs::UndirectedAdjacencyListGraph<TRoom>& graph) const {
+        for (const auto& kv : rooms_) {
+            const auto& room = kv.first;
+            const auto& desc = kv.second;
+            if (!desc.is_corridor()) {
+                continue;
+            }
+            const auto neigh = graph.neighbours(room);
+            if (neigh.size() != 2) {
+                throw std::invalid_argument("Each corridor must have exactly 2 neighbors");
+            }
+            for (const auto& n : neigh) {
+                if (get_room_description(n).is_corridor()) {
+                    throw std::invalid_argument("Corridor connected to another corridor");
+                }
+            }
+        }
+    }
+
+    std::map<TRoom, RoomDescriptionGrid2D> rooms_;
+    std::vector<Passage> passages_;
+};
+
+} // namespace edgar::generator::grid2d

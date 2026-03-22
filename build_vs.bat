@@ -5,7 +5,8 @@ if not exist %BUILD_DIR% (
     mkdir %BUILD_DIR%
 )
 
-cmake -S . -B %BUILD_DIR% -G "Visual Studio 17 2022" -A x64
+set "TOOLCHAIN=%~dp0toolchain\vcpkg\scripts\buildsystems\vcpkg.cmake"
+cmake -S . -B %BUILD_DIR% -G "Visual Studio 17 2022" -A x64 -DCMAKE_TOOLCHAIN_FILE=%TOOLCHAIN%
 if %errorlevel% neq 0 (
     echo CMake generation failed!
     exit /b %errorlevel%

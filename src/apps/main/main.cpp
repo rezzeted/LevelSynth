@@ -9,6 +9,10 @@
 #include <SDL3/SDL_main.h>
 #include <SDL3/SDL_opengl.h>
 #include <cstdio>
+#include <exception>
+#include <random>
+
+#include "edgar/edgar.hpp"
 
 int main(int argc, char* argv[])
 {
@@ -93,6 +97,9 @@ int main(int argc, char* argv[])
     ImGui_ImplSDL3_InitForOpenGL(window, gl_context);
     ImGui_ImplOpenGL3_Init("#version 130");
 
+    static char edgar_log[512] = "Click Generate to run Edgar (4-room cycle).";
+    static int edgar_rooms = 0;
+
     bool running = true;
     while (running) {
         SDL_Event event;
@@ -108,6 +115,44 @@ int main(int argc, char* argv[])
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplSDL3_NewFrame();
         ImGui::NewFrame();
+
+        if (ImGui::Begin("Edgar (C++ port)")) {
+            if (ImGui::Button("Generate 4-room cycle")) {
+                try {
+                    using namespace edgar;
+                    using namespace edgar::generator;
+                    using namespace edgar::generator::grid2d;
+                    auto square = RoomTemplateGrid2D(
+                        geometry::PolygonGrid2D::get_square(8),
+                        std::make_shared<SimpleDoorModeGrid2D>(1, 1));
+                    auto rectangle = RoomTemplateGrid2D(
+                        geometry::PolygonGrid2D::get_rectangle(6, 10),
+                        std::make_shared<SimpleDoorModeGrid2D>(1, 1));
+                    RoomDescriptionGrid2D room_desc(false, {square, rectangle});
+                    LevelDescriptionGrid2D<int> level;
+                    level.add_room(0, room_desc);
+                    level.add_room(1, room_desc);
+                    level.add_room(2, room_desc);
+                    level.add_room(3, room_desc);
+                    level.add_connection(0, 1);
+                    level.add_connection(0, 3);
+                    level.add_connection(1, 2);
+                    level.add_connection(2, 3);
+                    GraphBasedGeneratorGrid2D<int> generator(level);
+                    std::mt19937 rng(42);
+                    generator.inject_random_generator(std::move(rng));
+                    const auto layout = generator.generate_layout();
+                    edgar_rooms = static_cast<int>(layout.rooms.size());
+                    std::snprintf(edgar_log, sizeof edgar_log, "rooms=%d  time=%.2f ms  iterations=%d", edgar_rooms,
+                                  generator.time_total_ms(), generator.iterations_count());
+                } catch (const std::exception& e) {
+                    std::snprintf(edgar_log, sizeof edgar_log, "Error: %s", e.what());
+                    edgar_rooms = -1;
+                }
+            }
+            ImGui::Text("%s", edgar_log);
+        }
+        ImGui::End();
 
         ImGui::ShowDemoWindow();
 

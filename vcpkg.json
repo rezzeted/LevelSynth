@@ -1,0 +1,16 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "dependencies": [
+    "nlohmann-json",
+    "fmt",
+    "spdlog",
+    "gtest",
+    "sdl3",
+    "stb",
+    {
+      "name": "imgui",
+      "features": ["docking-experimental", "sdl3-binding", "opengl3-binding"]
+    }
+  ],
+  "builtin-baseline": "b472291f295551b7127359ea38fdd2ca092f6f1b"
+}
