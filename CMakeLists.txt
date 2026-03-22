@@ -18,3 +18,13 @@ add_subdirectory(src/libs)
 add_subdirectory(src/apps)
 enable_testing()
 add_subdirectory(src/tests)
+
+option(EDGAR_BUILD_DOCS "Build Doxygen HTML docs for edgar (requires doxygen)" OFF)
+if(EDGAR_BUILD_DOCS)
+    find_program(DOXYGEN_EXECUTABLE Doxygen REQUIRED)
+    add_custom_target(edgar_docs
+        COMMAND ${DOXYGEN_EXECUTABLE} ${CMAKE_SOURCE_DIR}/docs/Doxyfile
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/docs
+        COMMENT "Generating edgar Doxygen HTML (output under _build/docs/doxygen)"
+        VERBATIM)
+endif()

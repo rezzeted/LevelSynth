@@ -10,6 +10,7 @@
 #include <utility>
 #include <vector>
 
+#include "edgar/generator/grid2d/chain_based_generator_grid2d.hpp"
 #include "edgar/geometry/overlap.hpp"
 
 namespace edgar::generator::grid2d {
@@ -58,6 +59,15 @@ LayoutGrid2D<TRoom> GraphBasedGeneratorGrid2D<TRoom>::generate_layout() {
     iterations_count_ = 0;
 
     std::mt19937 rng = rng_.has_value() ? *rng_ : std::mt19937{std::random_device{}()};
+
+    if (configuration_.backend == GraphBasedGeneratorBackend::chain_simulated_annealing) {
+        const auto res =
+            ChainBasedGeneratorGrid2D<TRoom>::generate(level_, configuration_.simulated_annealing, rng);
+        iterations_count_ = res.iterations;
+        const auto t1 = std::chrono::steady_clock::now();
+        time_total_ms_ = std::chrono::duration<double, std::milli>(t1 - t0).count();
+        return res.layout;
+    }
 
     std::vector<TRoom> order;
     order.reserve(level_.rooms().size());

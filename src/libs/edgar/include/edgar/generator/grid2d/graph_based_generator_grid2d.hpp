@@ -10,9 +10,9 @@
 
 namespace edgar::generator::grid2d {
 
-/// Graph-based layout generator (2D grid). The C# implementation uses chain decomposition +
-/// simulated annealing in Legacy/Core; this C++ version uses a deterministic strip packer with
-/// Clipper2 polygon intersection for overlap checks (see docs/EDGAR_PORT_INVENTORY.md).
+/// Graph-based layout generator (2D grid). Default backend follows the C# pipeline at a high level
+/// (chain decomposition + simulated annealing). `GraphBasedGeneratorBackend::strip_packing` keeps the
+/// earlier deterministic strip packer (see docs/EDGAR_PORT_INVENTORY.md).
 template <typename TRoom>
 class GraphBasedGeneratorGrid2D {
 public:

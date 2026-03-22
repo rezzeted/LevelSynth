@@ -11,6 +11,7 @@ find_package(nlohmann_json CONFIG REQUIRED)
 find_package(fmt CONFIG REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
 find_package(Stb REQUIRED)
+find_package(Boost REQUIRED COMPONENTS graph CONFIG)
 
 # Clipper2: same version as vcpkg port (2.0.1) but built in-tree so the static
 # library matches the same MSVC toolchain as edgar (avoids LNK2019 __std_rotate
@@ -31,11 +32,15 @@ endif()
 add_subdirectory(${clipper2_upstream_SOURCE_DIR}/CPP ${clipper2_upstream_BINARY_DIR} EXCLUDE_FROM_ALL)
 
 add_library(edgar STATIC
+    src/geometry/orthogonal_line_grid2d.cpp
     src/geometry/polygon_grid2d.cpp
     src/geometry/overlap.cpp
     src/geometry/clipper2_util.cpp
+    src/graphs/planar_faces.cpp
     src/generator/grid2d/room_template_grid2d.cpp
+    src/generator/grid2d/simple_door_mode_grid2d.cpp
     src/io/dungeon_drawer.cpp
+    src/io/png_rgba.cpp
 )
 target_include_directories(edgar
     PUBLIC
@@ -46,6 +51,7 @@ target_include_directories(edgar
 target_link_libraries(edgar
     PUBLIC
         nlohmann_json::nlohmann_json
+        Boost::graph
     PRIVATE
         fmt::fmt
         spdlog::spdlog
