@@ -12,7 +12,9 @@
 #include "edgar/generator/grid2d/configuration_spaces_grid2d.hpp"
 #include "edgar/generator/grid2d/constraints_evaluator_grid2d.hpp"
 #include "edgar/generator/grid2d/detail/room_index_map.hpp"
+#include "edgar/generator/grid2d/chain_based_generator_grid2d.hpp"
 #include "edgar/generator/grid2d/graph_based_generator_configuration.hpp"
+#include "edgar/generator/common/simulated_annealing_configuration.hpp"
 #include "edgar/io/png_rgba.hpp"
 #include "edgar/graphs/undirected_graph.hpp"
 #include "edgar/geometry/bipartite_matching.hpp"
@@ -345,6 +347,24 @@ TEST(EdgarEnergy, ConstraintsEvaluator_noOverlapZeroPenalty) {
     EXPECT_DOUBLE_EQ(BasicEnergyUpdater::total_penalty(e), 0.0);
 }
 
+TEST(EdgarEnergy, Incident_to_room_sumMatchesTwiceTotal) {
+    using namespace edgar::geometry;
+    using namespace edgar::generator::grid2d;
+    using namespace edgar::generator::common;
+    std::vector<PolygonGrid2D> polys = {PolygonGrid2D::get_rectangle(2, 2), PolygonGrid2D::get_rectangle(2, 2),
+                                      PolygonGrid2D::get_rectangle(2, 2)};
+    std::vector<Vector2Int> pos = {{0, 0}, {1, 0}, {5, 0}};
+    std::vector<bool> is_corridor = {false, true, false};
+    const EnergyData full = ConstraintsEvaluatorGrid2D::evaluate(polys, pos, 0, &is_corridor);
+    const double total = BasicEnergyUpdater::total_penalty(full);
+    double sum_inc = 0.0;
+    for (std::size_t r = 0; r < polys.size(); ++r) {
+        sum_inc += BasicEnergyUpdater::total_penalty(
+            ConstraintsEvaluatorGrid2D::incident_to_room(r, polys, pos, 0, &is_corridor));
+    }
+    EXPECT_NEAR(sum_inc, 2.0 * total, 1e-9);
+}
+
 TEST(EdgarGenerator, FourRoomCycle_stripBackend) {
     using namespace edgar;
     using namespace edgar::generator::grid2d;
@@ -453,5 +473,44 @@ TEST(EdgarDoors, SimpleDoorModeSquareEight) {
     for (const auto& d : doors) {
         EXPECT_EQ(d.length, 1);
         EXPECT_GE(d.line.length(), 1);
+    }
+}
+
+TEST(EdgarGenerator, Chain_threeRoomsWithCorridor_lineGraph) {
+    using namespace edgar;
+    using namespace edgar::generator::grid2d;
+    using namespace edgar::generator::common;
+
+    auto square = RoomTemplateGrid2D(edgar::geometry::PolygonGrid2D::get_square(8),
+                                     std::make_shared<SimpleDoorModeGrid2D>(1, 1));
+    auto corridor_rect =
+        RoomTemplateGrid2D(edgar::geometry::PolygonGrid2D::get_rectangle(8, 2),
+                             std::make_shared<SimpleDoorModeGrid2D>(1, 1));
+    RoomDescriptionGrid2D room_desc(false, {square});
+    RoomDescriptionGrid2D corridor_desc(true, {corridor_rect});
+
+    LevelDescriptionGrid2D<int> level;
+    level.add_room(0, room_desc);
+    level.add_room(1, corridor_desc);
+    level.add_room(2, room_desc);
+    level.add_connection(0, 1);
+    level.add_connection(1, 2);
+
+    SimulatedAnnealingConfiguration sa_config;
+    sa_config.cycles = 8;
+    sa_config.trials_per_cycle = 40;
+    sa_config.max_stage_two_failures = 4;
+
+    std::mt19937 rng(42);
+    const auto result = ChainBasedGeneratorGrid2D<int>::generate(level, sa_config, rng);
+
+    ASSERT_EQ(result.layout.rooms.size(), 3u);
+    for (std::size_t i = 0; i < result.layout.rooms.size(); ++i) {
+        for (std::size_t j = i + 1; j < result.layout.rooms.size(); ++j) {
+            EXPECT_FALSE(edgar::geometry::polygons_overlap_area(result.layout.rooms[i].outline,
+                                                                result.layout.rooms[i].position,
+                                                                result.layout.rooms[j].outline,
+                                                                result.layout.rooms[j].position));
+        }
     }
 }

@@ -60,7 +60,8 @@ std::optional<geometry::Vector2Int> sample_maximum_intersection_position(
     const geometry::PolygonGrid2D& moving, const std::vector<DoorLineGrid2D>& moving_doors,
     const std::vector<int>& neighbor_indices, int moving_index, const std::vector<geometry::PolygonGrid2D>& outlines,
     const std::vector<geometry::Vector2Int>& positions, const std::vector<std::vector<DoorLineGrid2D>>& neighbor_doors,
-    const std::vector<bool>& placed, std::mt19937& rng, std::size_t max_point_checks) {
+    const std::vector<bool>& placed, std::mt19937& rng, std::size_t max_point_checks, bool moving_is_corridor,
+    const std::vector<bool>* neighbor_is_corridor_by_index) {
     if (neighbor_indices.empty()) {
         return std::nullopt;
     }
@@ -69,8 +70,18 @@ std::optional<geometry::Vector2Int> sample_maximum_intersection_position(
     std::vector<ConfigurationSpaceGrid2D> css;
     css.reserve(neighbor_indices.size());
     for (int k : neighbor_indices) {
-        css.push_back(gen.get_configuration_space(moving, moving_doors, outlines[static_cast<std::size_t>(k)],
-                                                    neighbor_doors[static_cast<std::size_t>(k)]));
+        const bool use_over_corridor =
+            moving_is_corridor && neighbor_is_corridor_by_index != nullptr &&
+            static_cast<std::size_t>(k) < neighbor_is_corridor_by_index->size() &&
+            !(*neighbor_is_corridor_by_index)[static_cast<std::size_t>(k)];
+        if (use_over_corridor) {
+            css.push_back(gen.get_configuration_space_over_corridor(
+                moving, moving_doors, outlines[static_cast<std::size_t>(k)],
+                neighbor_doors[static_cast<std::size_t>(k)], moving, moving_doors));
+        } else {
+            css.push_back(gen.get_configuration_space(moving, moving_doors, outlines[static_cast<std::size_t>(k)],
+                                                        neighbor_doors[static_cast<std::size_t>(k)]));
+        }
     }
 
     const int n0 = neighbor_indices[0];

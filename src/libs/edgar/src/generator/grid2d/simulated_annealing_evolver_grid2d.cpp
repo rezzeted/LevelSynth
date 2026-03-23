@@ -45,7 +45,8 @@ void SimulatedAnnealingEvolverGrid2D::evolve(std::vector<geometry::PolygonGrid2D
 
         for (int j = 0; j < config_.trials_per_cycle; ++j) {
             ++iterations;
-            // C# `MaxStageTwoFailures` applies when `TryCompleteChain` fails; Grid2D port has no corridor stage-two.
+            // C# `MaxStageTwoFailures` also feeds outer layout restarts in `ChainBasedGeneratorGrid2D`; this evolver
+            // does not use it (random-walk SA only).
 
             const int r = pick_room(rng);
             const geometry::Vector2Int old = positions[static_cast<std::size_t>(r)];
@@ -92,7 +93,7 @@ void SimulatedAnnealingEvolverGrid2D::evolve(std::vector<geometry::PolygonGrid2D
         }
 
         if (!was_accepted) {
-            // C# increments numberOfFailures (random restarts omitted in Grid2D port).
+            // C# increments numberOfFailures (handled only in the chain+layout-controller pipeline).
         }
         t *= ratio;
     }

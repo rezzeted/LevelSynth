@@ -22,11 +22,14 @@ std::vector<geometry::Vector2Int> enumerate_configuration_space_offsets(const Co
 
 /// C# `GetMaximumIntersection` subset: positions for `moving` so doors match all placed `neighbors` and
 /// `moving_index` does not overlap other placed rooms. `neighbor_doors[j]` = doors for `outlines[j]`.
+/// When `moving_is_corridor` and `neighbor_is_corridor_by_index` is set, uses `get_configuration_space_over_corridor`
+/// vs non-corridor neighbours (C# corridor door carrier).
 std::optional<geometry::Vector2Int> sample_maximum_intersection_position(
     const geometry::PolygonGrid2D& moving, const std::vector<DoorLineGrid2D>& moving_doors,
     const std::vector<int>& neighbor_indices, int moving_index, const std::vector<geometry::PolygonGrid2D>& outlines,
     const std::vector<geometry::Vector2Int>& positions, const std::vector<std::vector<DoorLineGrid2D>>& neighbor_doors,
-    const std::vector<bool>& placed, std::mt19937& rng, std::size_t max_point_checks = 80);
+    const std::vector<bool>& placed, std::mt19937& rng, std::size_t max_point_checks = 80,
+    bool moving_is_corridor = false, const std::vector<bool>* neighbor_is_corridor_by_index = nullptr);
 
 /// Facade for configuration-space queries (C# `ConfigurationSpacesGrid2D` subset + door-based generator).
 class ConfigurationSpacesGrid2D {

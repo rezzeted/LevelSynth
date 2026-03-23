@@ -8,10 +8,13 @@
 #include "edgar/generator/grid2d/configuration_spaces_grid2d.hpp"
 #include "edgar/generator/grid2d/detail/room_index_map.hpp"
 #include "edgar/generator/grid2d/layout_grid2d.hpp"
+#include "edgar/generator/common/basic_energy_updater.hpp"
+#include "edgar/generator/grid2d/constraints_evaluator_grid2d.hpp"
 #include "edgar/generator/grid2d/level_description_grid2d.hpp"
 #include "edgar/generator/grid2d/layout_controller_grid2d.hpp"
 #include "edgar/geometry/transformation_grid2d.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <optional>
 #include <random>
@@ -72,16 +75,6 @@ public:
             throw std::runtime_error("ChainBasedGeneratorGrid2D: chain decomposition does not cover all rooms");
         }
 
-        std::vector<geometry::PolygonGrid2D> outlines(static_cast<std::size_t>(n),
-                                                        geometry::PolygonGrid2D::get_rectangle(1, 1));
-        std::vector<geometry::Vector2Int> positions(static_cast<std::size_t>(n));
-        std::vector<geometry::TransformationGrid2D> transforms(static_cast<std::size_t>(n),
-                                                                 geometry::TransformationGrid2D::Identity);
-        std::vector<std::optional<RoomTemplateGrid2D>> templates(static_cast<std::size_t>(n));
-        std::vector<bool> placed(static_cast<std::size_t>(n), false);
-
-        int iter_count = 0;
-
         auto pick_template = [&](int room_index) {
             const TRoom id = rmap.index_to_room[static_cast<std::size_t>(room_index)];
             const auto& rd = level.get_room_description(id);
@@ -94,94 +87,133 @@ public:
             return std::tuple{tmpl, rd, poly, tr};
         };
 
-        {
-            const int r0 = order[0];
-            auto [tmpl, rd, poly, tr] = pick_template(r0);
-            (void)rd;
-            templates[static_cast<std::size_t>(r0)] = std::move(tmpl);
-            outlines[static_cast<std::size_t>(r0)] = std::move(poly);
-            transforms[static_cast<std::size_t>(r0)] = tr;
-            positions[static_cast<std::size_t>(r0)] = {0, 0};
-            placed[static_cast<std::size_t>(r0)] = true;
+        std::vector<bool> is_corridor_flags(static_cast<std::size_t>(n));
+        for (int i = 0; i < n; ++i) {
+            is_corridor_flags[static_cast<std::size_t>(i)] =
+                level.get_room_description(rmap.index_to_room[static_cast<std::size_t>(i)]).is_corridor();
         }
 
-        std::uniform_int_distribution<int> jitter(-32, 32);
+        auto penalty_total = [&](const std::vector<geometry::PolygonGrid2D>& ol,
+                                 const std::vector<geometry::Vector2Int>& pos) {
+            return common::BasicEnergyUpdater::total_penalty(
+                ConstraintsEvaluatorGrid2D::evaluate(ol, pos, level.minimum_room_distance, &is_corridor_flags));
+        };
 
-        for (std::size_t k = 1; k < order.size(); ++k) {
-            const int ri = order[k];
-            int pj = -1;
-            for (int nb : ig.neighbours(ri)) {
-                if (placed[static_cast<std::size_t>(nb)]) {
-                    pj = nb;
-                    break;
-                }
+        const int max_layout_restarts =
+            std::max(1, std::min(sa_config.max_stage_two_failures, 128));
+        int iter_count = 0;
+        std::vector<geometry::PolygonGrid2D> outlines;
+        std::vector<geometry::Vector2Int> positions;
+        std::vector<geometry::TransformationGrid2D> transforms;
+        std::vector<std::optional<RoomTemplateGrid2D>> templates;
+
+        for (int restart = 0; restart < max_layout_restarts; ++restart) {
+            outlines.assign(static_cast<std::size_t>(n), geometry::PolygonGrid2D::get_rectangle(1, 1));
+            positions.assign(static_cast<std::size_t>(n), geometry::Vector2Int{});
+            transforms.assign(static_cast<std::size_t>(n), geometry::TransformationGrid2D::Identity);
+            templates.assign(static_cast<std::size_t>(n), std::nullopt);
+            std::vector<bool> placed(static_cast<std::size_t>(n), false);
+
+            {
+                const int r0 = order[0];
+                auto [tmpl, rd, poly, tr] = pick_template(r0);
+                (void)rd;
+                templates[static_cast<std::size_t>(r0)] = std::move(tmpl);
+                outlines[static_cast<std::size_t>(r0)] = std::move(poly);
+                transforms[static_cast<std::size_t>(r0)] = tr;
+                positions[static_cast<std::size_t>(r0)] = {0, 0};
+                placed[static_cast<std::size_t>(r0)] = true;
             }
-            if (pj < 0) {
-                throw std::runtime_error("ChainBasedGeneratorGrid2D: no placed neighbour");
-            }
-            auto [tmpl, rd, poly, tr] = pick_template(ri);
-            (void)rd;
-            templates[static_cast<std::size_t>(ri)] = std::move(tmpl);
-            outlines[static_cast<std::size_t>(ri)] = std::move(poly);
-            transforms[static_cast<std::size_t>(ri)] = tr;
 
-            bool ok = false;
-            for (int attempt = 0; attempt < 8000; ++attempt) {
-                ++iter_count;
-                std::vector<std::vector<DoorLineGrid2D>> doors_tab(static_cast<std::size_t>(n));
-                for (int j = 0; j < n; ++j) {
-                    if (!templates[static_cast<std::size_t>(j)].has_value()) {
-                        continue;
-                    }
-                    if (j == ri || placed[static_cast<std::size_t>(j)]) {
-                        doors_tab[static_cast<std::size_t>(j)] =
-                            templates[static_cast<std::size_t>(j)]->doors().get_doors(
-                                outlines[static_cast<std::size_t>(j)]);
-                    }
-                }
-                const auto greedy_pos = LayoutControllerGrid2D::greedy_position_from_configuration_spaces(
-                    ri, level, rmap, ig, outlines[static_cast<std::size_t>(ri)],
-                    doors_tab[static_cast<std::size_t>(ri)], placed, outlines, positions, doors_tab, rng);
-                if (greedy_pos.has_value()) {
-                    positions[static_cast<std::size_t>(ri)] = *greedy_pos;
-                    placed[static_cast<std::size_t>(ri)] = true;
-                    ok = true;
-                    break;
-                }
+            std::uniform_int_distribution<int> jitter(-32, 32);
 
-                const int dx = jitter(rng);
-                const int dy = jitter(rng);
-                const geometry::Vector2Int pos{positions[static_cast<std::size_t>(pj)].x + dx,
-                                               positions[static_cast<std::size_t>(pj)].y + dy};
-                bool bad = false;
-                for (int j = 0; j < n; ++j) {
-                    if (!placed[static_cast<std::size_t>(j)]) {
-                        continue;
-                    }
-                    if (!ConfigurationSpacesGrid2D::compatible_non_overlapping(outlines[static_cast<std::size_t>(j)],
-                                                                             positions[static_cast<std::size_t>(j)],
-                                                                             outlines[static_cast<std::size_t>(ri)],
-                                                                             pos)) {
-                        bad = true;
+            for (std::size_t k = 1; k < order.size(); ++k) {
+                const int ri = order[k];
+                int pj = -1;
+                for (int nb : ig.neighbours(ri)) {
+                    if (placed[static_cast<std::size_t>(nb)]) {
+                        pj = nb;
                         break;
                     }
                 }
-                if (!bad) {
-                    positions[static_cast<std::size_t>(ri)] = pos;
-                    placed[static_cast<std::size_t>(ri)] = true;
-                    ok = true;
-                    break;
+                if (pj < 0) {
+                    throw std::runtime_error("ChainBasedGeneratorGrid2D: no placed neighbour");
+                }
+                auto [tmpl, rd, poly, tr] = pick_template(ri);
+                (void)rd;
+                templates[static_cast<std::size_t>(ri)] = std::move(tmpl);
+                outlines[static_cast<std::size_t>(ri)] = std::move(poly);
+                transforms[static_cast<std::size_t>(ri)] = tr;
+
+                bool ok = false;
+                for (int attempt = 0; attempt < 8000; ++attempt) {
+                    ++iter_count;
+                    std::vector<std::vector<DoorLineGrid2D>> doors_tab(static_cast<std::size_t>(n));
+                    for (int j = 0; j < n; ++j) {
+                        if (!templates[static_cast<std::size_t>(j)].has_value()) {
+                            continue;
+                        }
+                        if (j == ri || placed[static_cast<std::size_t>(j)]) {
+                            doors_tab[static_cast<std::size_t>(j)] =
+                                templates[static_cast<std::size_t>(j)]->doors().get_doors(
+                                    outlines[static_cast<std::size_t>(j)]);
+                        }
+                    }
+                    const auto greedy_pos = LayoutControllerGrid2D::greedy_position_from_configuration_spaces(
+                        ri, level, rmap, ig, outlines[static_cast<std::size_t>(ri)],
+                        doors_tab[static_cast<std::size_t>(ri)], placed, outlines, positions, doors_tab, rng);
+                    if (greedy_pos.has_value()) {
+                        positions[static_cast<std::size_t>(ri)] = *greedy_pos;
+                        placed[static_cast<std::size_t>(ri)] = true;
+                        ok = true;
+                        break;
+                    }
+
+                    const int dx = jitter(rng);
+                    const int dy = jitter(rng);
+                    const geometry::Vector2Int pos{positions[static_cast<std::size_t>(pj)].x + dx,
+                                                   positions[static_cast<std::size_t>(pj)].y + dy};
+                    bool bad = false;
+                    for (int j = 0; j < n; ++j) {
+                        if (!placed[static_cast<std::size_t>(j)]) {
+                            continue;
+                        }
+                        if (!ConfigurationSpacesGrid2D::compatible_non_overlapping(
+                                outlines[static_cast<std::size_t>(j)], positions[static_cast<std::size_t>(j)],
+                                outlines[static_cast<std::size_t>(ri)], pos)) {
+                            bad = true;
+                            break;
+                        }
+                    }
+                    if (!bad) {
+                        positions[static_cast<std::size_t>(ri)] = pos;
+                        placed[static_cast<std::size_t>(ri)] = true;
+                        ok = true;
+                        break;
+                    }
+                }
+                if (!ok) {
+                    throw std::runtime_error("ChainBasedGeneratorGrid2D: failed to place room without overlap");
                 }
             }
-            if (!ok) {
-                throw std::runtime_error("ChainBasedGeneratorGrid2D: failed to place room without overlap");
+
+            LayoutControllerGrid2D::polish_corridor_positions(level, rmap, ig, outlines, positions, templates, rng);
+
+            LayoutControllerGrid2D controller(sa_config);
+            int sa_iters = 0;
+            controller.evolve(level, rmap, ig, outlines, positions, templates, transforms, rng, &sa_iters);
+            iter_count += sa_iters;
+
+            int tcc_iters = 0;
+            const int tcc_pass_limit = std::min(64, std::max(8, n));
+            LayoutControllerGrid2D::try_complete_chain(level, rmap, ig, outlines, positions, templates, rng,
+                                                     tcc_pass_limit, &tcc_iters);
+            iter_count += tcc_iters;
+
+            if (penalty_total(outlines, positions) <= 0.0) {
+                break;
             }
         }
-
-        LayoutControllerGrid2D controller(sa_config);
-        int sa_iters = 0;
-        controller.evolve(level, rmap, ig, outlines, positions, templates, transforms, rng, &sa_iters);
-        iter_count += sa_iters;
 
         LayoutGrid2D<TRoom> layout;
         layout.rooms.reserve(static_cast<std::size_t>(n));

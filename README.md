@@ -23,7 +23,7 @@ cmake -S . -B _build -G "Visual Studio 17 2022" -A x64 -DCMAKE_TOOLCHAIN_FILE=%C
 cmake --build _build --config Debug
 ```
 
-Либо используйте пресет [`CMakePresets.json`](CMakePresets.json): `windows-vcpkg` (см. CMake Presets в IDE).
+Либо используйте пресеты [`CMakePresets.json`](CMakePresets.json): `cmake --preset vs2026`, затем `cmake --build --preset release` (triplet **`x64-windows-static`**, `CMAKE_TOOLCHAIN_FILE` и `VCPKG_OVERLAY_PORTS` заданы в пресете). Для Ninja без VS: `cmake --preset default`. Для VS 2022: пресет `vs2022` и build `debug-vs2022` / `release-vs2022`.
 
 Скрипт [`build_vs.bat`](build_vs.bat) передаёт тот же `CMAKE_TOOLCHAIN_FILE`.
 

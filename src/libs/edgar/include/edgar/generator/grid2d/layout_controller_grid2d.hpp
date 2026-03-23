@@ -15,6 +15,7 @@
 #include "edgar/graphs/undirected_graph.hpp"
 #include "edgar/geometry/transformation_grid2d.hpp"
 
+#include <cassert>
 #include <cmath>
 #include <cstddef>
 #include <optional>
@@ -52,8 +53,116 @@ public:
         if (rd.is_corridor() && neigh.size() < 2) {
             // C# `AddCorridorGreedily` expects two satisfied neighbours; allow one neighbour during chain growth.
         }
-        return sample_maximum_intersection_position(moving_outline, moving_doors, neigh, room_index, outlines,
-                                                    positions, doors_at_index, placed, rng, 120);
+        std::vector<bool> corridor_by_index(placed.size());
+        for (std::size_t i = 0; i < placed.size(); ++i) {
+            corridor_by_index[i] =
+                level.get_room_description(rmap.index_to_room[i]).is_corridor();
+        }
+        return sample_maximum_intersection_position(
+            moving_outline, moving_doors, neigh, room_index, outlines, positions, doors_at_index, placed, rng, 120,
+            rd.is_corridor(), &corridor_by_index);
+    }
+
+    /// Reposition corridor rooms using door-aware CS (after main chain or before SA).
+    template <typename TRoom>
+    static void polish_corridor_positions(const LevelDescriptionGrid2D<TRoom>& level,
+                                          const detail::RoomIndexMap<TRoom>& rmap,
+                                          const graphs::UndirectedAdjacencyListGraph<int>& ig,
+                                          std::vector<geometry::PolygonGrid2D>& outlines,
+                                          std::vector<geometry::Vector2Int>& positions,
+                                          std::vector<std::optional<RoomTemplateGrid2D>>& templates,
+                                          std::mt19937& rng) {
+        const int n = static_cast<int>(outlines.size());
+        if (n <= 0) {
+            return;
+        }
+        std::vector<bool> placed(static_cast<std::size_t>(n), true);
+        std::vector<std::vector<DoorLineGrid2D>> doors_tab(static_cast<std::size_t>(n));
+        for (int i = 0; i < n; ++i) {
+            const auto& ot = templates[static_cast<std::size_t>(i)];
+            if (ot.has_value()) {
+                doors_tab[static_cast<std::size_t>(i)] =
+                    ot->doors().get_doors(outlines[static_cast<std::size_t>(i)]);
+            }
+        }
+        for (int i = 0; i < n; ++i) {
+            if (!level.get_room_description(rmap.index_to_room[static_cast<std::size_t>(i)]).is_corridor()) {
+                continue;
+            }
+            const auto gp = greedy_position_from_configuration_spaces(
+                i, level, rmap, ig, outlines[static_cast<std::size_t>(i)],
+                doors_tab[static_cast<std::size_t>(i)], placed, outlines, positions, doors_tab, rng);
+            if (gp.has_value()) {
+                positions[static_cast<std::size_t>(i)] = *gp;
+            }
+        }
+    }
+
+    /// C# `TryCompleteChain` subset: greedy sweeps until zero penalty or no progress / pass limit.
+    template <typename TRoom>
+    static bool try_complete_chain(const LevelDescriptionGrid2D<TRoom>& level,
+                                   const detail::RoomIndexMap<TRoom>& rmap,
+                                   const graphs::UndirectedAdjacencyListGraph<int>& ig,
+                                   std::vector<geometry::PolygonGrid2D>& outlines,
+                                   std::vector<geometry::Vector2Int>& positions,
+                                   std::vector<std::optional<RoomTemplateGrid2D>>& templates,
+                                   std::mt19937& rng, int max_passes_without_progress, int* iterations_out) {
+        const int n = static_cast<int>(outlines.size());
+        if (n <= 0) {
+            return true;
+        }
+        std::vector<bool> is_corridor(static_cast<std::size_t>(n));
+        for (int i = 0; i < n; ++i) {
+            is_corridor[static_cast<std::size_t>(i)] =
+                level.get_room_description(rmap.index_to_room[static_cast<std::size_t>(i)]).is_corridor();
+        }
+        auto total_penalty = [&]() {
+            return common::BasicEnergyUpdater::total_penalty(ConstraintsEvaluatorGrid2D::evaluate(
+                outlines, positions, level.minimum_room_distance, &is_corridor));
+        };
+        if (total_penalty() <= 0.0) {
+            return true;
+        }
+        std::vector<bool> placed(static_cast<std::size_t>(n), true);
+        int no_progress = 0;
+        int sweep_steps = 0;
+        while (no_progress < max_passes_without_progress) {
+            bool progress = false;
+            for (int r = 0; r < n; ++r) {
+                std::vector<std::vector<DoorLineGrid2D>> doors_tab(static_cast<std::size_t>(n));
+                for (int j = 0; j < n; ++j) {
+                    const auto& ot = templates[static_cast<std::size_t>(j)];
+                    if (ot.has_value()) {
+                        doors_tab[static_cast<std::size_t>(j)] =
+                            ot->doors().get_doors(outlines[static_cast<std::size_t>(j)]);
+                    }
+                }
+                const geometry::Vector2Int old_p = positions[static_cast<std::size_t>(r)];
+                const auto gp = greedy_position_from_configuration_spaces(
+                    r, level, rmap, ig, outlines[static_cast<std::size_t>(r)],
+                    doors_tab[static_cast<std::size_t>(r)], placed, outlines, positions, doors_tab, rng);
+                if (gp.has_value() && (gp->x != old_p.x || gp->y != old_p.y)) {
+                    positions[static_cast<std::size_t>(r)] = *gp;
+                    progress = true;
+                }
+                ++sweep_steps;
+            }
+            if (total_penalty() <= 0.0) {
+                if (iterations_out) {
+                    *iterations_out += sweep_steps;
+                }
+                return true;
+            }
+            if (!progress) {
+                ++no_progress;
+            } else {
+                no_progress = 0;
+            }
+        }
+        if (iterations_out) {
+            *iterations_out += sweep_steps;
+        }
+        return total_penalty() <= 0.0;
     }
 
     /// SA polish with C#-style `PerturbLayout` (shape vs position) and Metropolis schedule.
@@ -135,6 +244,18 @@ public:
                 const geometry::TransformationGrid2D old_tr = transforms[static_cast<std::size_t>(r)];
                 bool did_shape_perturb = false;
 
+                const common::EnergyData incident_old =
+                    ConstraintsEvaluatorGrid2D::incident_to_room(static_cast<std::size_t>(r), outlines, positions,
+                                                                 level.minimum_room_distance, &is_corridor);
+                const double incident_old_tot = common::BasicEnergyUpdater::total_penalty(incident_old);
+
+#ifndef NDEBUG
+                if (iterations % 256 == 0) {
+                    const double full = energy();
+                    assert(std::abs(full - e) < 1e-4);
+                }
+#endif
+
                 if (shape_vs_pos(rng) < 0.4) {
                     // C# `PerturbShape`
                     const TRoom rid = rmap.index_to_room[static_cast<std::size_t>(r)];
@@ -163,7 +284,7 @@ public:
                     if (!neigh.empty() && !my_doors.empty()) {
                         const auto np = sample_maximum_intersection_position(
                             outlines[static_cast<std::size_t>(r)], my_doors, neigh, r, outlines, positions,
-                            doors_tab, placed, rng, 160);
+                            doors_tab, placed, rng, 160, is_corridor[static_cast<std::size_t>(r)], &is_corridor);
                         if (np.has_value()) {
                             positions[static_cast<std::size_t>(r)] = *np;
                         }
@@ -179,7 +300,7 @@ public:
                     if (!neigh.empty() && !my_doors.empty()) {
                         const auto np = sample_maximum_intersection_position(
                             outlines[static_cast<std::size_t>(r)], my_doors, neigh, r, outlines, positions,
-                            doors_tab, placed, rng, 160);
+                            doors_tab, placed, rng, 160, is_corridor[static_cast<std::size_t>(r)], &is_corridor);
                         if (np.has_value()) {
                             positions[static_cast<std::size_t>(r)] = *np;
                         } else {
@@ -192,7 +313,11 @@ public:
                     }
                 }
 
-                const double new_e = energy();
+                const common::EnergyData incident_new =
+                    ConstraintsEvaluatorGrid2D::incident_to_room(static_cast<std::size_t>(r), outlines, positions,
+                                                                 level.minimum_room_distance, &is_corridor);
+                const double new_e =
+                    e - incident_old_tot + common::BasicEnergyUpdater::total_penalty(incident_new);
                 const double energy_delta = new_e - e;
                 const double delta_abs = std::abs(energy_delta);
                 bool accept = false;
