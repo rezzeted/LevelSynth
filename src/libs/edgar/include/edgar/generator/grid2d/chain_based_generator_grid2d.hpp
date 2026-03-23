@@ -1,12 +1,15 @@
 #pragma once
 
+#include "edgar/chain_decompositions/breadth_first_chain_decomposition.hpp"
 #include "edgar/chain_decompositions/breadth_first_chain_decomposition_old.hpp"
+#include "edgar/chain_decompositions/two_stage_chain_decomposition.hpp"
 #include "edgar/generator/common/simulated_annealing_configuration.hpp"
+#include "edgar/generator/grid2d/graph_based_generator_configuration.hpp"
 #include "edgar/generator/grid2d/configuration_spaces_grid2d.hpp"
 #include "edgar/generator/grid2d/detail/room_index_map.hpp"
 #include "edgar/generator/grid2d/layout_grid2d.hpp"
 #include "edgar/generator/grid2d/level_description_grid2d.hpp"
-#include "edgar/generator/grid2d/simulated_annealing_evolver_grid2d.hpp"
+#include "edgar/generator/grid2d/layout_controller_grid2d.hpp"
 #include "edgar/geometry/transformation_grid2d.hpp"
 
 #include <cstddef>
@@ -29,11 +32,33 @@ public:
     };
 
     static Result generate(const LevelDescriptionGrid2D<TRoom>& level, common::SimulatedAnnealingConfiguration sa_config,
-                           std::mt19937& rng) {
+                           std::mt19937& rng,
+                           ChainDecompositionStrategy chain_strategy = ChainDecompositionStrategy::breadth_first_old,
+                           chain_decompositions::ChainDecompositionConfiguration chain_cfg = {}) {
         detail::RoomIndexMap<TRoom> rmap(level);
         const auto ig = rmap.int_graph(level);
-        chain_decompositions::BreadthFirstChainDecompositionOld decomposer;
-        const auto chains = decomposer.get_chains(ig);
+
+        std::vector<chain_decompositions::Chain<int>> chains;
+        switch (chain_strategy) {
+        case ChainDecompositionStrategy::breadth_first_old: {
+            chain_decompositions::BreadthFirstChainDecompositionOld decomposer;
+            chains = decomposer.get_chains(ig);
+            break;
+        }
+        case ChainDecompositionStrategy::breadth_first_new: {
+            chain_decompositions::BreadthFirstChainDecomposition decomposer(std::move(chain_cfg));
+            chains = decomposer.get_chains(ig);
+            break;
+        }
+        case ChainDecompositionStrategy::two_stage: {
+            chain_decompositions::BreadthFirstChainDecomposition inner(std::move(chain_cfg));
+            chain_decompositions::TwoStageChainDecomposition<TRoom> two_stage(level, rmap, inner);
+            chains = two_stage.get_chains(ig);
+            break;
+        }
+        default:
+            throw std::invalid_argument("ChainBasedGeneratorGrid2D: unknown chain decomposition strategy");
+        }
 
         const int n = static_cast<int>(rmap.index_to_room.size());
         std::vector<int> order;
@@ -132,7 +157,7 @@ public:
             }
         }
 
-        SimulatedAnnealingEvolverGrid2D evolver(sa_config);
+        LayoutControllerGrid2D evolver(sa_config);
         int sa_iters = 0;
         evolver.evolve(outlines, positions, rng, &sa_iters);
         iter_count += sa_iters;

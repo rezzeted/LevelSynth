@@ -3,14 +3,21 @@
 #include <random>
 #include <unordered_set>
 
+#include "edgar/chain_decompositions/breadth_first_chain_decomposition.hpp"
 #include "edgar/chain_decompositions/breadth_first_chain_decomposition_old.hpp"
+#include "edgar/chain_decompositions/two_stage_chain_decomposition.hpp"
 #include "edgar/edgar.hpp"
 #include "edgar/generator/common/basic_energy_updater.hpp"
+#include "edgar/generator/grid2d/configuration_spaces_generator.hpp"
 #include "edgar/generator/grid2d/configuration_spaces_grid2d.hpp"
 #include "edgar/generator/grid2d/constraints_evaluator_grid2d.hpp"
+#include "edgar/generator/grid2d/detail/room_index_map.hpp"
 #include "edgar/generator/grid2d/graph_based_generator_configuration.hpp"
 #include "edgar/io/png_rgba.hpp"
 #include "edgar/graphs/undirected_graph.hpp"
+#include "edgar/geometry/bipartite_matching.hpp"
+#include "edgar/geometry/clipper2_util.hpp"
+#include "edgar/geometry/grid_polygon_partitioning.hpp"
 #include "edgar/geometry/orthogonal_line_grid2d.hpp"
 #include "edgar/geometry/overlap.hpp"
 #include "edgar/generator/grid2d/simple_door_mode_grid2d.hpp"
@@ -64,6 +71,251 @@ TEST(EdgarChainDecomposition, BreadthFirstOld_CoversAllVertices_TwoGraphs) {
         }
         EXPECT_EQ(seen.size(), graph.vertex_count());
     }
+}
+
+TEST(EdgarChainDecomposition, BreadthFirstNew_CoversAllVertices_TriangleWithTail) {
+    using namespace edgar::chain_decompositions;
+    using namespace edgar::graphs;
+
+    UndirectedAdjacencyListGraph<int> graph;
+    for (int i = 0; i <= 4; ++i) {
+        graph.add_vertex(i);
+    }
+    graph.add_edge(0, 1);
+    graph.add_edge(1, 2);
+    graph.add_edge(2, 0);
+    graph.add_edge(1, 3);
+    graph.add_edge(3, 4);
+    graph.add_edge(4, 1);
+
+    BreadthFirstChainDecomposition decomposer;
+    const auto chains = decomposer.get_chains(graph);
+    std::unordered_set<int> seen;
+    for (const auto& ch : chains) {
+        for (int n : ch.nodes) {
+            seen.insert(n);
+        }
+    }
+    EXPECT_EQ(seen.size(), graph.vertex_count());
+}
+
+TEST(EdgarChainDecomposition, TwoStage_EmbedsStageTwoRoom) {
+    using namespace edgar::chain_decompositions;
+    using namespace edgar::generator::grid2d;
+    using namespace edgar::geometry;
+
+    auto square = RoomTemplateGrid2D(PolygonGrid2D::get_square(4), std::make_shared<SimpleDoorModeGrid2D>(1, 1));
+    RoomDescriptionGrid2D stage_one(false, {square}, 1);
+    RoomDescriptionGrid2D stage_two(false, {square}, 2);
+
+    LevelDescriptionGrid2D<int> level;
+    level.add_room(0, stage_one);
+    level.add_room(1, stage_one);
+    level.add_room(2, stage_one);
+    level.add_room(3, stage_two);
+    level.add_connection(0, 1);
+    level.add_connection(1, 2);
+    level.add_connection(1, 3);
+
+    detail::RoomIndexMap<int> rmap(level);
+    BreadthFirstChainDecomposition inner;
+    TwoStageChainDecomposition<int> ts(level, rmap, inner);
+    const auto ig = rmap.int_graph(level);
+    const auto chains = ts.get_chains(ig);
+    std::unordered_set<int> seen;
+    for (const auto& ch : chains) {
+        for (int n : ch.nodes) {
+            seen.insert(n);
+        }
+    }
+    EXPECT_EQ(seen.size(), 4u);
+}
+
+namespace {
+
+bool rect_eq(const edgar::geometry::RectangleGrid2D& a, const edgar::geometry::RectangleGrid2D& b) {
+    return a.a == b.a && a.b == b.b;
+}
+
+bool partition_matches_any(const std::vector<edgar::geometry::RectangleGrid2D>& got,
+                           const std::vector<std::vector<edgar::geometry::RectangleGrid2D>>& alternatives) {
+    using edgar::geometry::RectangleGrid2D;
+    for (const std::vector<RectangleGrid2D>& exp : alternatives) {
+        if (exp.size() != got.size()) {
+            continue;
+        }
+        bool ok = true;
+        for (const RectangleGrid2D& r : exp) {
+            bool found = false;
+            for (const RectangleGrid2D& g : got) {
+                if (rect_eq(g, r)) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                ok = false;
+                break;
+            }
+        }
+        if (ok) {
+            return true;
+        }
+    }
+    return false;
+}
+
+} // namespace
+
+TEST(EdgarGeometry, BipartiteVertexCover_Basic) {
+    using namespace edgar::geometry;
+    {
+        const auto c = bipartite_min_vertex_cover(2, 3, {{0, 0}, {0, 1}, {1, 1}, {1, 2}});
+        EXPECT_EQ(c.first.size(), 2u);
+        EXPECT_EQ(c.second.size(), 0u);
+    }
+    {
+        const auto c = bipartite_min_vertex_cover(4, 2, {{0, 0}, {1, 0}, {1, 1}, {2, 1}, {3, 1}});
+        EXPECT_EQ(c.first.size(), 0u);
+        EXPECT_EQ(c.second.size(), 2u);
+    }
+}
+
+TEST(EdgarGeometry, BipartiteIndependentSet_Basic) {
+    using namespace edgar::geometry;
+    {
+        const auto s = bipartite_max_independent_set(2, 3, {{0, 0}, {0, 1}, {1, 1}, {1, 2}});
+        EXPECT_EQ(s.size(), 3u);
+    }
+    {
+        const auto s = bipartite_max_independent_set(4, 2, {{0, 0}, {1, 0}, {1, 1}, {2, 1}, {3, 1}});
+        EXPECT_EQ(s.size(), 4u);
+    }
+}
+
+TEST(EdgarGeometry, GridPolygonPartitioning_LShape) {
+    using namespace edgar::geometry;
+    const PolygonGrid2D poly = PolygonGrid2DBuilder()
+                                   .add_point(0, 0)
+                                   .add_point(0, 6)
+                                   .add_point(3, 6)
+                                   .add_point(3, 3)
+                                   .add_point(7, 3)
+                                   .add_point(7, 0)
+                                   .build();
+    const auto parts = partition_orthogonal_polygon_to_rectangles(poly);
+    EXPECT_EQ(parts.size(), 2u);
+    const std::vector<std::vector<RectangleGrid2D>> alts = {
+        {RectangleGrid2D({0, 3}, {3, 6}), RectangleGrid2D({0, 0}, {7, 3})},
+        {RectangleGrid2D({0, 0}, {3, 6}), RectangleGrid2D({3, 0}, {7, 3})},
+    };
+    EXPECT_TRUE(partition_matches_any(parts, alts));
+}
+
+TEST(EdgarGeometry, GridPolygonPartitioning_AnotherShape) {
+    using namespace edgar::geometry;
+    const PolygonGrid2D poly = PolygonGrid2DBuilder()
+                                   .add_point(0, 0)
+                                   .add_point(0, 3)
+                                   .add_point(-1, 3)
+                                   .add_point(-1, 5)
+                                   .add_point(5, 5)
+                                   .add_point(5, 3)
+                                   .add_point(4, 3)
+                                   .add_point(4, 0)
+                                   .add_point(5, 0)
+                                   .add_point(5, -2)
+                                   .add_point(-1, -2)
+                                   .add_point(-1, 0)
+                                   .build();
+    const auto parts = partition_orthogonal_polygon_to_rectangles(poly);
+    EXPECT_EQ(parts.size(), 3u);
+    const std::vector<std::vector<RectangleGrid2D>> alts = {
+        {RectangleGrid2D({-1, -2}, {5, 0}), RectangleGrid2D({0, 0}, {4, 3}), RectangleGrid2D({-1, 3}, {5, 5})},
+    };
+    EXPECT_TRUE(partition_matches_any(parts, alts));
+}
+
+TEST(EdgarGeometry, GridPolygonPartitioning_ComplexShape) {
+    using namespace edgar::geometry;
+    const PolygonGrid2D poly =
+        PolygonGrid2DBuilder()
+            .add_point(2, 0)
+            .add_point(2, 1)
+            .add_point(1, 1)
+            .add_point(1, 2)
+            .add_point(0, 2)
+            .add_point(0, 7)
+            .add_point(1, 7)
+            .add_point(1, 8)
+            .add_point(2, 8)
+            .add_point(2, 9)
+            .add_point(7, 9)
+            .add_point(7, 8)
+            .add_point(8, 8)
+            .add_point(8, 7)
+            .add_point(9, 7)
+            .add_point(9, 2)
+            .add_point(8, 2)
+            .add_point(8, 1)
+            .add_point(7, 1)
+            .add_point(7, 0)
+            .build();
+    const auto parts = partition_orthogonal_polygon_to_rectangles(poly);
+    EXPECT_EQ(parts.size(), 5u);
+    const std::vector<std::vector<RectangleGrid2D>> alts = {
+        {RectangleGrid2D({2, 0}, {7, 1}), RectangleGrid2D({1, 1}, {8, 2}), RectangleGrid2D({0, 2}, {9, 7}),
+         RectangleGrid2D({1, 7}, {8, 8}), RectangleGrid2D({2, 8}, {7, 9})},
+        {RectangleGrid2D({0, 2}, {1, 7}), RectangleGrid2D({1, 1}, {2, 8}), RectangleGrid2D({2, 0}, {7, 9}),
+         RectangleGrid2D({7, 1}, {8, 8}), RectangleGrid2D({8, 2}, {9, 7})},
+    };
+    EXPECT_TRUE(partition_matches_any(parts, alts));
+}
+
+TEST(EdgarGeometry, GridPolygonPartitioning_PlusShape) {
+    using namespace edgar::geometry;
+    const PolygonGrid2D poly =
+        PolygonGrid2DBuilder()
+            .add_point(0, 2)
+            .add_point(0, 4)
+            .add_point(2, 4)
+            .add_point(2, 6)
+            .add_point(4, 6)
+            .add_point(4, 4)
+            .add_point(6, 4)
+            .add_point(6, 2)
+            .add_point(4, 2)
+            .add_point(4, 0)
+            .add_point(2, 0)
+            .add_point(2, 2)
+            .build();
+    const auto parts = partition_orthogonal_polygon_to_rectangles(poly);
+    EXPECT_EQ(parts.size(), 3u);
+    const std::vector<std::vector<RectangleGrid2D>> alts = {
+        {RectangleGrid2D({2, 0}, {4, 2}), RectangleGrid2D({0, 2}, {6, 4}), RectangleGrid2D({2, 4}, {4, 6})},
+        {RectangleGrid2D({0, 2}, {2, 4}), RectangleGrid2D({2, 0}, {4, 6}), RectangleGrid2D({4, 2}, {6, 4})},
+    };
+    EXPECT_TRUE(partition_matches_any(parts, alts));
+}
+
+TEST(EdgarGeometry, OverlapAlongLine_discreteSweep) {
+    using namespace edgar::geometry;
+    const auto a = PolygonGrid2D::get_rectangle(3, 2);
+    const auto b = PolygonGrid2D::get_rectangle(3, 2);
+    const OrthogonalLineGrid2D line({-5, 0}, {5, 0});
+    const auto ev = overlap_along_line(a, b, line);
+    EXPECT_FALSE(ev.empty());
+}
+
+TEST(EdgarConfigSpaces, ConfigurationSpacesGenerator_nonEmptyForMatchingSquares) {
+    using namespace edgar::geometry;
+    using namespace edgar::generator::grid2d;
+    const auto poly = PolygonGrid2D::get_square(8);
+    SimpleDoorModeGrid2D mode(1, 1);
+    const std::vector<DoorLineGrid2D> doors = mode.get_doors(poly);
+    ConfigurationSpacesGenerator gen;
+    const auto cs = gen.get_configuration_space(poly, doors, poly, doors);
+    EXPECT_FALSE(cs.lines.empty());
 }
 
 TEST(EdgarGeometry, RectanglePolygonClockwise) {

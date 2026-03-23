@@ -1,8 +1,19 @@
 #pragma once
 
+#include "edgar/chain_decompositions/chain_decomposition_configuration.hpp"
 #include "edgar/generator/common/simulated_annealing_configuration.hpp"
 
 namespace edgar::generator::grid2d {
+
+/// Which chain decomposition feeds `ChainBasedGeneratorGrid2D` (C# `GraphBasedGenerator` strategies).
+enum class ChainDecompositionStrategy {
+    /// Historical tests / stable behaviour (`BreadthFirstChainDecompositionOld`).
+    breadth_first_old = 0,
+    /// Planar-face BFS decomposition (`BreadthFirstChainDecomposition`).
+    breadth_first_new = 1,
+    /// Run inner decomposition on `get_stage_one_graph()`, then merge stage-two rooms (`TwoStageChainDecomposition`).
+    two_stage = 2,
+};
 
 enum class GraphBasedGeneratorBackend {
     /// Fast strip packer + Clipper2 overlap (original C++ port).
@@ -14,6 +25,12 @@ enum class GraphBasedGeneratorBackend {
 /// Mirrors a subset of C# `GraphBasedGeneratorConfiguration` plus C++ backend selection.
 struct GraphBasedGeneratorConfiguration {
     GraphBasedGeneratorBackend backend = GraphBasedGeneratorBackend::chain_simulated_annealing;
+
+    /// Used when `backend == chain_simulated_annealing`.
+    ChainDecompositionStrategy chain_decomposition = ChainDecompositionStrategy::breadth_first_old;
+
+    /// Settings for `breadth_first_new` / `two_stage` inner BFS (`BreadthFirstChainDecomposition`).
+    chain_decompositions::ChainDecompositionConfiguration chain_decomposition_configuration{};
 
     /// Extra spacing multiplier when strip-packing rooms (implementation detail).
     int strip_gap_cells = 0;

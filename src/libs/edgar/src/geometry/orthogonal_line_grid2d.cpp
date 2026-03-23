@@ -1,11 +1,57 @@
 #include "edgar/geometry/orthogonal_line_grid2d.hpp"
 
+#include <algorithm>
+
 namespace edgar::geometry {
 
 OrthogonalLineGrid2D::OrthogonalLineGrid2D(Vector2Int f, Vector2Int t) : from(f), to(t) {
     if (f.x != t.x && f.y != t.y) {
         throw std::invalid_argument("OrthogonalLineGrid2D: not axis-aligned");
     }
+}
+
+Vector2Int OrthogonalLineGrid2D::direction_vector() const {
+    switch (get_direction()) {
+    case OrthogonalDirection::Right:
+        return {1, 0};
+    case OrthogonalDirection::Left:
+        return {-1, 0};
+    case OrthogonalDirection::Top:
+        return {0, 1};
+    case OrthogonalDirection::Bottom:
+        return {0, -1};
+    default:
+        throw std::invalid_argument("OrthogonalLineGrid2D::direction_vector: degenerate line");
+    }
+}
+
+std::vector<Vector2Int> OrthogonalLineGrid2D::grid_points_inclusive() const {
+    std::vector<Vector2Int> out;
+    Vector2Int cur = from;
+    out.push_back(cur);
+    while (cur != to) {
+        if (cur.x < to.x) {
+            ++cur.x;
+        } else if (cur.x > to.x) {
+            --cur.x;
+        } else if (cur.y < to.y) {
+            ++cur.y;
+        } else if (cur.y > to.y) {
+            --cur.y;
+        }
+        out.push_back(cur);
+    }
+    return out;
+}
+
+bool OrthogonalLineGrid2D::contains_point(Vector2Int p) const {
+    if (from.x == to.x) {
+        return p.x == from.x && p.y >= std::min(from.y, to.y) && p.y <= std::max(from.y, to.y);
+    }
+    if (from.y == to.y) {
+        return p.y == from.y && p.x >= std::min(from.x, to.x) && p.x <= std::max(from.x, to.x);
+    }
+    return false;
 }
 
 OrthogonalDirection OrthogonalLineGrid2D::get_direction() const {
@@ -25,6 +71,26 @@ OrthogonalLineGrid2D OrthogonalLineGrid2D::rotate(int degrees_clockwise) const {
     return OrthogonalLineGrid2D(from.rotate_around_center(degrees_clockwise), to.rotate_around_center(degrees_clockwise));
 }
 
+OrthogonalLineGrid2D OrthogonalLineGrid2D::normalized() const {
+    if (from.x == to.x && from.y == to.y) {
+        return *this;
+    }
+    if (from.y == to.y) {
+        return from.x <= to.x ? *this : OrthogonalLineGrid2D(to, from);
+    }
+    if (from.x == to.x) {
+        return from.y <= to.y ? *this : OrthogonalLineGrid2D(to, from);
+    }
+    throw std::invalid_argument("OrthogonalLineGrid2D::normalized: not orthogonal");
+}
+
+OrthogonalLineGrid2D OrthogonalLineGrid2D::rotate(int degrees_clockwise, bool normalize_after) const {
+    OrthogonalLineGrid2D r = rotate(degrees_clockwise);
+    return normalize_after ? r.normalized() : r;
+}
+
+int OrthogonalLineGrid2D::compute_rotation_clockwise_degrees() const { return compute_rotation_to_right(); }
+
 int OrthogonalLineGrid2D::compute_rotation_to_right() const {
     switch (get_direction()) {
         case OrthogonalDirection::Right:
@@ -37,6 +103,21 @@ int OrthogonalLineGrid2D::compute_rotation_to_right() const {
             return 90;
         default:
             throw std::invalid_argument("OrthogonalLineGrid2D::compute_rotation_to_right: degenerate line");
+    }
+}
+
+OrthogonalDirection opposite_direction(OrthogonalDirection d) {
+    switch (d) {
+    case OrthogonalDirection::Top:
+        return OrthogonalDirection::Bottom;
+    case OrthogonalDirection::Bottom:
+        return OrthogonalDirection::Top;
+    case OrthogonalDirection::Left:
+        return OrthogonalDirection::Right;
+    case OrthogonalDirection::Right:
+        return OrthogonalDirection::Left;
+    default:
+        throw std::invalid_argument("opposite_direction: undefined");
     }
 }
 

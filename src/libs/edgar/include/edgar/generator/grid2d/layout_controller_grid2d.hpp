@@ -4,8 +4,10 @@
 
 namespace edgar::generator::grid2d {
 
-/// In C# this coordinates perturbations and constraints; in this port the overlap-reduction step is
-/// represented by `SimulatedAnnealingEvolverGrid2D` pending a fuller `LayoutController` port.
+/// C# `LayoutController` wires `ConstraintsEvaluator`, `IConfigurationSpaces`, greedy `AddNodeGreedily`,
+/// `PerturbLayout` / shape vs position, `TryCompleteChain` for corridors, and per-node energy updates.
+/// The Grid2D C++ port only exposes the **SA polish** step as `SimulatedAnnealingEvolverGrid2D` (cycles × trials,
+/// Metropolis on total penalty); a full controller API is **not** ported here — tracked as follow-up.
 using LayoutControllerGrid2D = SimulatedAnnealingEvolverGrid2D;
 
 } // namespace edgar::generator::grid2d

@@ -61,8 +61,9 @@ LayoutGrid2D<TRoom> GraphBasedGeneratorGrid2D<TRoom>::generate_layout() {
     std::mt19937 rng = rng_.has_value() ? *rng_ : std::mt19937{std::random_device{}()};
 
     if (configuration_.backend == GraphBasedGeneratorBackend::chain_simulated_annealing) {
-        const auto res =
-            ChainBasedGeneratorGrid2D<TRoom>::generate(level_, configuration_.simulated_annealing, rng);
+        const auto res = ChainBasedGeneratorGrid2D<TRoom>::generate(
+            level_, configuration_.simulated_annealing, rng, configuration_.chain_decomposition,
+            configuration_.chain_decomposition_configuration);
         iterations_count_ = res.iterations;
         const auto t1 = std::chrono::steady_clock::now();
         time_total_ms_ = std::chrono::duration<double, std::milli>(t1 - t0).count();

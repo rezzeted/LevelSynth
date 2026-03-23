@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdexcept>
+#include <vector>
 
 #include "edgar/geometry/vector2_int.hpp"
 
@@ -26,16 +27,40 @@ struct OrthogonalLineGrid2D {
 
     OrthogonalDirection get_direction() const;
 
+    /// Unit step along the line from `from` toward `to` (C# `GetDirectionVector`).
+    Vector2Int direction_vector() const;
+
+    /// Inclusive grid points from `from` to `to` along the segment.
+    std::vector<Vector2Int> grid_points_inclusive() const;
+
+    /// Whether `p` lies on this closed orthogonal segment (inclusive).
+    bool contains_point(Vector2Int p) const;
+
     /// Clockwise rotation around the origin (same convention as C# / Vector2Int::rotate_around_center).
     OrthogonalLineGrid2D rotate(int degrees_clockwise) const;
+
+    /// Rotate; if `normalize_after`, orient `from`→`to` along the canonical direction (C# `Rotate(..., normalize)`).
+    OrthogonalLineGrid2D rotate(int degrees_clockwise, bool normalize_after) const;
+
+    /// Canonical `from`→`to` for the line direction (C# `GetNormalized`).
+    OrthogonalLineGrid2D normalized() const;
+
+    /// Degrees to rotate so this line becomes horizontal Right (C# `ComputeRotation`).
+    int compute_rotation_clockwise_degrees() const;
 
     /// Removes `from_amount` steps from the From end and `to_amount` from the To end after rotating
     /// the segment to horizontal "Right" (see C# OrthogonalLineGrid2D.Shrink).
     OrthogonalLineGrid2D shrink(int from_amount, int to_amount) const;
     OrthogonalLineGrid2D shrink(int symmetric_amount) const { return shrink(symmetric_amount, symmetric_amount); }
 
+    friend OrthogonalLineGrid2D operator+(OrthogonalLineGrid2D line, Vector2Int offset) {
+        return OrthogonalLineGrid2D(line.from + offset, line.to + offset);
+    }
+
 private:
     int compute_rotation_to_right() const;
 };
+
+OrthogonalDirection opposite_direction(OrthogonalDirection d);
 
 } // namespace edgar::geometry

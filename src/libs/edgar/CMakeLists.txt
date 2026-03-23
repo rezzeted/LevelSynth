@@ -33,10 +33,16 @@ add_subdirectory(${clipper2_upstream_SOURCE_DIR}/CPP ${clipper2_upstream_BINARY_
 
 add_library(edgar STATIC
     src/geometry/orthogonal_line_grid2d.cpp
+    src/geometry/orthogonal_line_intersection.cpp
+    src/geometry/bipartite_matching.cpp
+    src/geometry/grid_polygon_partitioning.cpp
+    src/geometry/polygon_overlap_grid2d.cpp
     src/geometry/polygon_grid2d.cpp
     src/geometry/overlap.cpp
     src/geometry/clipper2_util.cpp
     src/graphs/planar_faces.cpp
+    src/generator/grid2d/configuration_spaces_generator.cpp
+    src/generator/grid2d/simulated_annealing_evolver_grid2d.cpp
     src/generator/grid2d/room_template_grid2d.cpp
     src/generator/grid2d/simple_door_mode_grid2d.cpp
     src/io/dungeon_drawer.cpp
@@ -52,10 +58,10 @@ target_link_libraries(edgar
     PUBLIC
         nlohmann_json::nlohmann_json
         Boost::graph
+        Clipper2
     PRIVATE
         fmt::fmt
         spdlog::spdlog
-        Clipper2
 )
 target_compile_features(edgar PUBLIC cxx_std_20)
 if(MSVC)
