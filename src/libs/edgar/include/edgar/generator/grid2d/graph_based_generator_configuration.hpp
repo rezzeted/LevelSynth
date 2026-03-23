@@ -2,6 +2,7 @@
 
 #include "edgar/chain_decompositions/chain_decomposition_configuration.hpp"
 #include "edgar/generator/common/simulated_annealing_configuration.hpp"
+#include "edgar/generator/grid2d/layout_orchestration.hpp"
 
 namespace edgar::generator::grid2d {
 
@@ -36,6 +37,10 @@ struct GraphBasedGeneratorConfiguration {
     int strip_gap_cells = 0;
 
     common::SimulatedAnnealingConfiguration simulated_annealing{};
+
+    /// C# `SimulatedAnnealingEvolver.Evolve` yield stream (`OnEachLayoutGenerated` emits intermediate layouts).
+    LayoutStreamMode layout_stream_mode = LayoutStreamMode::Single;
+    int max_layout_yields = 10000;
 };
 
 } // namespace edgar::generator::grid2d

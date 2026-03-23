@@ -7,7 +7,9 @@
 #include "edgar/generator/grid2d/graph_based_generator_configuration.hpp"
 #include "edgar/generator/grid2d/configuration_spaces_grid2d.hpp"
 #include "edgar/generator/grid2d/detail/room_index_map.hpp"
+#include "edgar/generator/grid2d/grid2d_layout_state.hpp"
 #include "edgar/generator/grid2d/layout_grid2d.hpp"
+#include "edgar/generator/grid2d/layout_orchestration.hpp"
 #include "edgar/generator/common/basic_energy_updater.hpp"
 #include "edgar/generator/grid2d/constraints_evaluator_grid2d.hpp"
 #include "edgar/generator/grid2d/level_description_grid2d.hpp"
@@ -37,9 +39,11 @@ public:
     static Result generate(const LevelDescriptionGrid2D<TRoom>& level, common::SimulatedAnnealingConfiguration sa_config,
                            std::mt19937& rng,
                            ChainDecompositionStrategy chain_strategy = ChainDecompositionStrategy::breadth_first_old,
-                           chain_decompositions::ChainDecompositionConfiguration chain_cfg = {}) {
-        detail::RoomIndexMap<TRoom> rmap(level);
-        const auto ig = rmap.int_graph(level);
+                           chain_decompositions::ChainDecompositionConfiguration chain_cfg = {},
+                           const ChainGenerateContext<TRoom>* ctx = nullptr) {
+        Grid2DLayoutState<TRoom> state(level);
+        const detail::RoomIndexMap<TRoom>& rmap = state.rmap;
+        const auto& ig = state.ig;
 
         std::vector<chain_decompositions::Chain<int>> chains;
         switch (chain_strategy) {
@@ -102,16 +106,58 @@ public:
         const int max_layout_restarts =
             std::max(1, std::min(sa_config.max_stage_two_failures, 128));
         int iter_count = 0;
-        std::vector<geometry::PolygonGrid2D> outlines;
-        std::vector<geometry::Vector2Int> positions;
-        std::vector<geometry::TransformationGrid2D> transforms;
-        std::vector<std::optional<RoomTemplateGrid2D>> templates;
+        int yields_emitted = 0;
+        const int max_yields = ctx ? ctx->max_layout_yields : 0;
+
+        auto sync_stats_iterations = [&]() {
+            if (ctx && ctx->stats_out) {
+                ctx->stats_out->iterations_total = iter_count;
+            }
+        };
+
+        auto emit = [&](LayoutYieldEvent ev, Grid2DLayoutState<TRoom>& st, double pen) {
+            if (!ctx || ctx->layout_stream != LayoutStreamMode::OnEachLayoutGenerated || !ctx->on_layout) {
+                return;
+            }
+            if (ev == LayoutYieldEvent::LayoutGenerated) {
+                if (max_yields > 0 && yields_emitted >= max_yields) {
+                    return;
+                }
+                ++yields_emitted;
+            }
+            LayoutYieldInfo info;
+            info.event_type = ev;
+            info.iterations_total = iter_count;
+            info.energy = pen;
+            if (ctx->stats_out) {
+                info.iterations_since_last_event = ctx->stats_out->iterations_since_last_event;
+                info.layouts_generated = ctx->stats_out->layouts_generated;
+                info.chain_number = ctx->stats_out->chain_number;
+            }
+            sync_stats_iterations();
+            ctx->on_layout(info, st.to_layout_grid());
+            if (ctx->stats_out && ev == LayoutYieldEvent::LayoutGenerated) {
+                ctx->stats_out->layouts_generated++;
+                ctx->stats_out->iterations_since_last_event = 0;
+            }
+        };
+
+        bool success = false;
+        double last_penalty = 0.0;
 
         for (int restart = 0; restart < max_layout_restarts; ++restart) {
-            outlines.assign(static_cast<std::size_t>(n), geometry::PolygonGrid2D::get_rectangle(1, 1));
-            positions.assign(static_cast<std::size_t>(n), geometry::Vector2Int{});
-            transforms.assign(static_cast<std::size_t>(n), geometry::TransformationGrid2D::Identity);
-            templates.assign(static_cast<std::size_t>(n), std::nullopt);
+            if (restart > 0) {
+                if (ctx && ctx->stats_out) {
+                    ctx->stats_out->number_of_failures++;
+                }
+                emit(LayoutYieldEvent::RandomRestart, state, last_penalty);
+            }
+
+            state.resize_room_slots(n);
+            auto& outlines = state.outlines;
+            auto& positions = state.positions;
+            auto& transforms = state.transforms;
+            auto& templates = state.templates;
             std::vector<bool> placed(static_cast<std::size_t>(n), false);
 
             {
@@ -148,6 +194,9 @@ public:
                 bool ok = false;
                 for (int attempt = 0; attempt < 8000; ++attempt) {
                     ++iter_count;
+                    if (ctx && ctx->stats_out) {
+                        ctx->stats_out->iterations_since_last_event++;
+                    }
                     std::vector<std::vector<DoorLineGrid2D>> doors_tab(static_cast<std::size_t>(n));
                     for (int j = 0; j < n; ++j) {
                         if (!templates[static_cast<std::size_t>(j)].has_value()) {
@@ -197,39 +246,44 @@ public:
                 }
             }
 
-            LayoutControllerGrid2D::polish_corridor_positions(level, rmap, ig, outlines, positions, templates, rng);
+            LayoutControllerGrid2D::polish_corridor_positions(state, rng);
 
             LayoutControllerGrid2D controller(sa_config);
             int sa_iters = 0;
-            controller.evolve(level, rmap, ig, outlines, positions, templates, transforms, rng, &sa_iters);
+            controller.evolve(state, rng, &sa_iters);
             iter_count += sa_iters;
+            if (ctx && ctx->stats_out) {
+                ctx->stats_out->iterations_since_last_event += sa_iters;
+            }
 
             int tcc_iters = 0;
             const int tcc_pass_limit = std::min(64, std::max(8, n));
-            LayoutControllerGrid2D::try_complete_chain(level, rmap, ig, outlines, positions, templates, rng,
-                                                     tcc_pass_limit, &tcc_iters);
+            LayoutControllerGrid2D::try_complete_chain(state, rng, tcc_pass_limit, &tcc_iters);
             iter_count += tcc_iters;
+            if (ctx && ctx->stats_out) {
+                ctx->stats_out->iterations_since_last_event += tcc_iters;
+            }
 
-            if (penalty_total(outlines, positions) <= 0.0) {
+            last_penalty = penalty_total(outlines, positions);
+            sync_stats_iterations();
+
+            if (last_penalty <= 0.0) {
+                success = true;
+                emit(LayoutYieldEvent::LayoutGenerated, state, last_penalty);
                 break;
             }
+            if (ctx && ctx->stats_out) {
+                ctx->stats_out->stage_two_failures++;
+            }
+            emit(LayoutYieldEvent::StageTwoFailure, state, last_penalty);
         }
 
-        LayoutGrid2D<TRoom> layout;
-        layout.rooms.reserve(static_cast<std::size_t>(n));
-        for (int i = 0; i < n; ++i) {
-            const TRoom id = rmap.index_to_room[static_cast<std::size_t>(i)];
-            const auto& rd = level.get_room_description(id);
-            layout.rooms.push_back(LayoutRoomGrid2D<TRoom>{
-                .room = id,
-                .outline = outlines[static_cast<std::size_t>(i)],
-                .position = positions[static_cast<std::size_t>(i)],
-                .is_corridor = rd.is_corridor(),
-                .room_template = *templates[static_cast<std::size_t>(i)],
-                .room_description = rd,
-                .transformation = transforms[static_cast<std::size_t>(i)],
-            });
+        if (!success && ctx && ctx->layout_stream == LayoutStreamMode::OnEachLayoutGenerated && ctx->on_layout) {
+            emit(LayoutYieldEvent::OutOfIterations, state, last_penalty);
         }
+        sync_stats_iterations();
+
+        LayoutGrid2D<TRoom> layout = state.to_layout_grid();
         return Result{std::move(layout), iter_count};
     }
 };

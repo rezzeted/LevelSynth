@@ -514,3 +514,54 @@ TEST(EdgarGenerator, Chain_threeRoomsWithCorridor_lineGraph) {
         }
     }
 }
+
+TEST(EdgarGenerator, Chain_yieldStream_matchesSingleAndCountsEvents) {
+    using namespace edgar;
+    using namespace edgar::generator::grid2d;
+    using namespace edgar::generator::common;
+
+    auto square = RoomTemplateGrid2D(edgar::geometry::PolygonGrid2D::get_square(8),
+                                     std::make_shared<SimpleDoorModeGrid2D>(1, 1));
+    auto corridor_rect =
+        RoomTemplateGrid2D(edgar::geometry::PolygonGrid2D::get_rectangle(8, 2),
+                             std::make_shared<SimpleDoorModeGrid2D>(1, 1));
+    RoomDescriptionGrid2D room_desc(false, {square});
+    RoomDescriptionGrid2D corridor_desc(true, {corridor_rect});
+
+    LevelDescriptionGrid2D<int> level;
+    level.add_room(0, room_desc);
+    level.add_room(1, corridor_desc);
+    level.add_room(2, room_desc);
+    level.add_connection(0, 1);
+    level.add_connection(1, 2);
+
+    SimulatedAnnealingConfiguration sa_config;
+    sa_config.cycles = 8;
+    sa_config.trials_per_cycle = 40;
+    sa_config.max_stage_two_failures = 4;
+
+    std::mt19937 rng_single(42);
+    const auto baseline = ChainBasedGeneratorGrid2D<int>::generate(level, sa_config, rng_single);
+
+    LayoutOrchestrationStats stats{};
+    ChainGenerateContext<int> ctx;
+    ctx.layout_stream = LayoutStreamMode::OnEachLayoutGenerated;
+    ctx.max_layout_yields = 100;
+    int layout_generated_events = 0;
+    ctx.on_layout = [&](const LayoutYieldInfo& info, const LayoutGrid2D<int>& lay) {
+        (void)lay;
+        if (info.event_type == LayoutYieldEvent::LayoutGenerated) {
+            ++layout_generated_events;
+        }
+    };
+    ctx.stats_out = &stats;
+
+    std::mt19937 rng_stream(42);
+    const auto streamed = ChainBasedGeneratorGrid2D<int>::generate(
+        level, sa_config, rng_stream, ChainDecompositionStrategy::breadth_first_old, {}, &ctx);
+
+    EXPECT_EQ(baseline.iterations, streamed.iterations);
+    EXPECT_EQ(baseline.layout.rooms.size(), streamed.layout.rooms.size());
+    EXPECT_GE(layout_generated_events, 1);
+    EXPECT_EQ(stats.layouts_generated, layout_generated_events);
+}

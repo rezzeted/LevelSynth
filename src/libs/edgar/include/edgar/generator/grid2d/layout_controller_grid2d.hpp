@@ -10,6 +10,7 @@
 #include "edgar/generator/grid2d/detail/room_index_map.hpp"
 #include "edgar/generator/grid2d/door_line_grid2d.hpp"
 #include "edgar/generator/grid2d/level_description_grid2d.hpp"
+#include "edgar/generator/grid2d/grid2d_layout_state.hpp"
 #include "edgar/generator/grid2d/room_template_grid2d.hpp"
 #include "edgar/generator/grid2d/simulated_annealing_evolver_grid2d.hpp"
 #include "edgar/graphs/undirected_graph.hpp"
@@ -373,6 +374,26 @@ public:
                             int* iterations_out) const {
         SimulatedAnnealingEvolverGrid2D ev(config_);
         ev.evolve(outlines, positions, rng, iterations_out);
+    }
+
+    /// `ILayout`-style façade: delegates to vector-based overloads on `Grid2DLayoutState`.
+    template <typename TRoom>
+    static void polish_corridor_positions(Grid2DLayoutState<TRoom>& state, std::mt19937& rng) {
+        polish_corridor_positions(*state.level, state.rmap, state.ig, state.outlines, state.positions, state.templates,
+                                  rng);
+    }
+
+    template <typename TRoom>
+    static bool try_complete_chain(Grid2DLayoutState<TRoom>& state, std::mt19937& rng, int max_passes_without_progress,
+                                   int* iterations_out) {
+        return try_complete_chain(*state.level, state.rmap, state.ig, state.outlines, state.positions, state.templates,
+                                  rng, max_passes_without_progress, iterations_out);
+    }
+
+    template <typename TRoom>
+    void evolve(Grid2DLayoutState<TRoom>& state, std::mt19937& rng, int* iterations_out) {
+        evolve(*state.level, state.rmap, state.ig, state.outlines, state.positions, state.templates, state.transforms,
+               rng, iterations_out);
     }
 
 private:
