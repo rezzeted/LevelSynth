@@ -20,6 +20,8 @@ enum class LayoutStreamMode {
     Single = 0,
     /// Emit `LayoutYieldEvent::LayoutGenerated` for each successful chain completion (penalty <= 0), up to `max_layout_yields`.
     OnEachLayoutGenerated = 1,
+    /// After each accepted SA perturb, run `TryCompleteChain` on a clone and emit like C# `SimulatedAnnealingEvolver` inner loop.
+    OnEachSaTryCompleteChain = 2,
 };
 
 /// C# `SimulatedAnnealingEventArgs` subset: iteration bookkeeping around yields and stage-two failures.

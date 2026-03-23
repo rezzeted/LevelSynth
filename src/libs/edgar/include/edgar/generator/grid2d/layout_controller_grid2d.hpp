@@ -11,6 +11,7 @@
 #include "edgar/generator/grid2d/door_line_grid2d.hpp"
 #include "edgar/generator/grid2d/level_description_grid2d.hpp"
 #include "edgar/generator/grid2d/grid2d_layout_state.hpp"
+#include "edgar/generator/grid2d/layout_orchestration.hpp"
 #include "edgar/generator/grid2d/room_template_grid2d.hpp"
 #include "edgar/generator/grid2d/simulated_annealing_evolver_grid2d.hpp"
 #include "edgar/graphs/undirected_graph.hpp"
@@ -167,12 +168,16 @@ public:
     }
 
     /// SA polish with C#-style `PerturbLayout` (shape vs position) and Metropolis schedule.
+    /// When `ctx->layout_stream == OnEachSaTryCompleteChain` and `state_for_inner_clone` is set, runs C#-style
+    /// `TryCompleteChain` on a clone after each accepted perturb (approximates `SimulatedAnnealingEvolver` inner loop).
     template <typename TRoom>
     void evolve(const LevelDescriptionGrid2D<TRoom>& level, const detail::RoomIndexMap<TRoom>& rmap,
                 const graphs::UndirectedAdjacencyListGraph<int>& ig, std::vector<geometry::PolygonGrid2D>& outlines,
                 std::vector<geometry::Vector2Int>& positions,
                 std::vector<std::optional<RoomTemplateGrid2D>>& templates,
-                std::vector<geometry::TransformationGrid2D>& transforms, std::mt19937& rng, int* iterations_out) {
+                std::vector<geometry::TransformationGrid2D>& transforms, std::mt19937& rng, int* iterations_out,
+                const ChainGenerateContext<TRoom>* ctx = nullptr,
+                Grid2DLayoutState<TRoom>* state_for_inner_clone = nullptr) {
         const int n = static_cast<int>(outlines.size());
         if (n <= 0) {
             if (iterations_out) {
@@ -227,8 +232,42 @@ public:
 
         int iterations = 0;
         int last_success_iteration = 0;
+        int inner_tcc_iters_sum = 0;
+        int inner_layouts_emitted = 0;
 
         std::vector<bool> placed(static_cast<std::size_t>(n), true);
+
+        auto emit_sa = [&](LayoutYieldEvent ev, const Grid2DLayoutState<TRoom>& st, double pen) {
+            if (!ctx || ctx->layout_stream != LayoutStreamMode::OnEachSaTryCompleteChain || !ctx->on_layout) {
+                return;
+            }
+            if (ctx->max_layout_yields > 0 && inner_layouts_emitted >= ctx->max_layout_yields &&
+                ev == LayoutYieldEvent::LayoutGenerated) {
+                return;
+            }
+            if (ev == LayoutYieldEvent::LayoutGenerated) {
+                ++inner_layouts_emitted;
+            }
+            LayoutYieldInfo info;
+            info.event_type = ev;
+            info.iterations_total = iterations + inner_tcc_iters_sum;
+            info.energy = pen;
+            if (ctx->stats_out) {
+                info.iterations_since_last_event = ctx->stats_out->iterations_since_last_event;
+                info.layouts_generated = ctx->stats_out->layouts_generated;
+                info.chain_number = ctx->stats_out->chain_number;
+                ctx->stats_out->iterations_total = iterations + inner_tcc_iters_sum;
+            }
+            ctx->on_layout(info, st.to_layout_grid());
+            if (ctx->stats_out) {
+                if (ev == LayoutYieldEvent::LayoutGenerated) {
+                    ctx->stats_out->layouts_generated++;
+                    ctx->stats_out->iterations_since_last_event = 0;
+                } else if (ev == LayoutYieldEvent::StageTwoFailure) {
+                    ctx->stats_out->stage_two_failures++;
+                }
+            }
+        };
 
         for (int i = 0; i < cycles; ++i) {
             if (iterations - last_success_iteration > config_.max_iterations_without_success) {
@@ -343,6 +382,26 @@ public:
                     if (e <= 0.0) {
                         last_success_iteration = iterations;
                     }
+                    if (ctx && state_for_inner_clone &&
+                        ctx->layout_stream == LayoutStreamMode::OnEachSaTryCompleteChain && ctx->on_layout) {
+                        Grid2DLayoutState<TRoom> cl = state_for_inner_clone->clone();
+                        int tcc_iters = 0;
+                        const int tcc_pass = std::min(64, std::max(8, n));
+                        const bool tcc_ok =
+                            try_complete_chain(cl, rng, tcc_pass, &tcc_iters);
+                        inner_tcc_iters_sum += tcc_iters;
+                        if (ctx->stats_out) {
+                            ctx->stats_out->iterations_since_last_event += tcc_iters;
+                        }
+                        const double pen_after =
+                            common::BasicEnergyUpdater::total_penalty(ConstraintsEvaluatorGrid2D::evaluate(
+                                cl.outlines, cl.positions, level.minimum_room_distance, &is_corridor));
+                        if (tcc_ok) {
+                            emit_sa(LayoutYieldEvent::LayoutGenerated, cl, pen_after);
+                        } else {
+                            emit_sa(LayoutYieldEvent::StageTwoFailure, cl, pen_after);
+                        }
+                    }
                 } else {
                     positions[static_cast<std::size_t>(r)] = old_pos;
                     if (did_shape_perturb) {
@@ -354,7 +413,7 @@ public:
 
                 if (e <= 0.0) {
                     if (iterations_out) {
-                        *iterations_out = iterations;
+                        *iterations_out = iterations + inner_tcc_iters_sum;
                     }
                     return;
                 }
@@ -364,7 +423,7 @@ public:
         }
 
         if (iterations_out) {
-            *iterations_out = iterations;
+            *iterations_out = iterations + inner_tcc_iters_sum;
         }
     }
 
@@ -391,9 +450,10 @@ public:
     }
 
     template <typename TRoom>
-    void evolve(Grid2DLayoutState<TRoom>& state, std::mt19937& rng, int* iterations_out) {
+    void evolve(Grid2DLayoutState<TRoom>& state, std::mt19937& rng, int* iterations_out,
+                 const ChainGenerateContext<TRoom>* ctx = nullptr) {
         evolve(*state.level, state.rmap, state.ig, state.outlines, state.positions, state.templates, state.transforms,
-               rng, iterations_out);
+               rng, iterations_out, ctx, &state);
     }
 
 private:

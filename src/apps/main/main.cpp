@@ -8,11 +8,79 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
 #include <SDL3/SDL_opengl.h>
+#include <algorithm>
 #include <cstdio>
 #include <exception>
+#include <limits>
+#include <optional>
 #include <random>
+#include <vector>
 
 #include "edgar/edgar.hpp"
+
+namespace {
+
+void draw_layout_preview_imgui(const edgar::generator::grid2d::LayoutGrid2D<int>& layout) {
+    using namespace edgar::generator::grid2d;
+    if (layout.rooms.empty()) {
+        return;
+    }
+    int min_x = std::numeric_limits<int>::max();
+    int min_y = std::numeric_limits<int>::max();
+    int max_x = std::numeric_limits<int>::min();
+    int max_y = std::numeric_limits<int>::min();
+    for (const auto& room : layout.rooms) {
+        for (const auto& p : room.outline.points()) {
+            const int wx = p.x + room.position.x;
+            const int wy = p.y + room.position.y;
+            min_x = std::min(min_x, wx);
+            min_y = std::min(min_y, wy);
+            max_x = std::max(max_x, wx);
+            max_y = std::max(max_y, wy);
+        }
+    }
+    const float dx = static_cast<float>(std::max(1, max_x - min_x));
+    const float dy = static_cast<float>(std::max(1, max_y - min_y));
+
+    const float preview_h = 380.0f;
+    const float avail_w = ImGui::GetContentRegionAvail().x;
+    const ImVec2 canvas_sz(std::max(100.0f, avail_w), preview_h);
+    const ImVec2 canvas_p0 = ImGui::GetCursorScreenPos();
+    const ImVec2 canvas_p1 = ImVec2(canvas_p0.x + canvas_sz.x, canvas_p0.y + canvas_sz.y);
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilled(canvas_p0, canvas_p1, IM_COL32(24, 26, 30, 255));
+    dl->PushClipRect(canvas_p0, canvas_p1, true);
+
+    constexpr float pad = 16.0f;
+    const float scale =
+        std::min((canvas_sz.x - 2.0f * pad) / dx, (canvas_sz.y - 2.0f * pad) / dy);
+
+    auto to_screen = [&](int wx, int wy) {
+        return ImVec2(canvas_p0.x + pad + (static_cast<float>(wx - min_x)) * scale,
+                      canvas_p0.y + pad + (static_cast<float>(wy - min_y)) * scale);
+    };
+
+    for (const auto& room : layout.rooms) {
+        std::vector<ImVec2> pts;
+        pts.reserve(room.outline.points().size());
+        for (const auto& p : room.outline.points()) {
+            pts.push_back(to_screen(p.x + room.position.x, p.y + room.position.y));
+        }
+        if (pts.size() < 2) {
+            continue;
+        }
+        const ImU32 stroke = room.is_corridor ? IM_COL32(120, 200, 230, 255) : IM_COL32(180, 220, 130, 255);
+        dl->AddPolyline(pts.data(), static_cast<int>(pts.size()), stroke, ImDrawFlags_Closed, 2.5f);
+    }
+
+    dl->PopClipRect();
+    dl->AddRect(canvas_p0, canvas_p1, IM_COL32(80, 80, 95, 255));
+
+    ImGui::Dummy(canvas_sz);
+}
+
+} // namespace
 
 int main(int argc, char* argv[])
 {
@@ -99,6 +167,7 @@ int main(int argc, char* argv[])
 
     static char edgar_log[512] = "Click Generate to run Edgar (4-room cycle).";
     static int edgar_rooms = 0;
+    static std::optional<edgar::generator::grid2d::LayoutGrid2D<int>> edgar_last_layout;
 
     bool running = true;
     while (running) {
@@ -142,15 +211,22 @@ int main(int argc, char* argv[])
                     std::mt19937 rng(42);
                     generator.inject_random_generator(std::move(rng));
                     const auto layout = generator.generate_layout();
+                    edgar_last_layout = layout;
                     edgar_rooms = static_cast<int>(layout.rooms.size());
                     std::snprintf(edgar_log, sizeof edgar_log, "rooms=%d  time=%.2f ms  iterations=%d", edgar_rooms,
                                   generator.time_total_ms(), generator.iterations_count());
                 } catch (const std::exception& e) {
                     std::snprintf(edgar_log, sizeof edgar_log, "Error: %s", e.what());
                     edgar_rooms = -1;
+                    edgar_last_layout.reset();
                 }
             }
             ImGui::Text("%s", edgar_log);
+            if (edgar_last_layout.has_value() && !edgar_last_layout->rooms.empty()) {
+                ImGui::Spacing();
+                ImGui::TextUnformatted("Layout preview (orthogonal outlines, corridors highlighted):");
+                draw_layout_preview_imgui(*edgar_last_layout);
+            }
         }
         ImGui::End();
 

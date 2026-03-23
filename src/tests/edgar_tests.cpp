@@ -15,13 +15,16 @@
 #include "edgar/generator/grid2d/chain_based_generator_grid2d.hpp"
 #include "edgar/generator/grid2d/graph_based_generator_configuration.hpp"
 #include "edgar/generator/common/simulated_annealing_configuration.hpp"
+#include "edgar/io/layout_json.hpp"
 #include "edgar/io/png_rgba.hpp"
+#include "edgar/graphs/graph_algorithms.hpp"
 #include "edgar/graphs/undirected_graph.hpp"
 #include "edgar/geometry/bipartite_matching.hpp"
 #include "edgar/geometry/clipper2_util.hpp"
 #include "edgar/geometry/grid_polygon_partitioning.hpp"
 #include "edgar/geometry/orthogonal_line_grid2d.hpp"
 #include "edgar/geometry/overlap.hpp"
+#include "edgar/geometry/polygon_overlap_grid2d.hpp"
 #include "edgar/generator/grid2d/simple_door_mode_grid2d.hpp"
 
 TEST(EdgarChainDecomposition, BreadthFirstOld_CoversAllVertices_TwoGraphs) {
@@ -119,7 +122,7 @@ TEST(EdgarChainDecomposition, TwoStage_EmbedsStageTwoRoom) {
     level.add_connection(1, 2);
     level.add_connection(1, 3);
 
-    detail::RoomIndexMap<int> rmap(level);
+    edgar::generator::grid2d::detail::RoomIndexMap<int> rmap(level);
     BreadthFirstChainDecomposition inner;
     TwoStageChainDecomposition<int> ts(level, rmap, inner);
     const auto ig = rmap.int_graph(level);
@@ -307,6 +310,55 @@ TEST(EdgarGeometry, OverlapAlongLine_discreteSweep) {
     const OrthogonalLineGrid2D line({-5, 0}, {5, 0});
     const auto ev = overlap_along_line(a, b, line);
     EXPECT_FALSE(ev.empty());
+}
+
+TEST(EdgarGeometry, OverlapAlongLine_mergedMatchesBruteforce) {
+    using namespace edgar::geometry;
+    const auto a = PolygonGrid2D::get_rectangle(3, 2);
+    const auto b = PolygonGrid2D::get_rectangle(3, 2);
+    const OrthogonalLineGrid2D line_h({-5, 0}, {5, 0});
+    const OrthogonalLineGrid2D line_v({0, -4}, {0, 4});
+    const auto merged_h = overlap_along_line_polygon_partition(a, b, line_h);
+    const auto brute_h = edgar::geometry::detail::overlap_along_line_polygon_partition_bruteforce(a, b, line_h);
+    EXPECT_EQ(merged_h.size(), brute_h.size());
+    for (std::size_t i = 0; i < merged_h.size(); ++i) {
+        EXPECT_EQ(merged_h[i].first.x, brute_h[i].first.x);
+        EXPECT_EQ(merged_h[i].first.y, brute_h[i].first.y);
+        EXPECT_EQ(merged_h[i].second, brute_h[i].second);
+    }
+    const auto merged_v = overlap_along_line_polygon_partition(a, b, line_v);
+    const auto brute_v = edgar::geometry::detail::overlap_along_line_polygon_partition_bruteforce(a, b, line_v);
+    EXPECT_EQ(merged_v.size(), brute_v.size());
+    for (std::size_t i = 0; i < merged_v.size(); ++i) {
+        EXPECT_EQ(merged_v[i].first.x, brute_v[i].first.x);
+        EXPECT_EQ(merged_v[i].first.y, brute_v[i].first.y);
+        EXPECT_EQ(merged_v[i].second, brute_v[i].second);
+    }
+}
+
+TEST(EdgarGraphs, IsTree_pathAndTriangle) {
+    using namespace edgar::graphs;
+    {
+        UndirectedAdjacencyListGraph<int> g;
+        g.add_vertex(0);
+        EXPECT_TRUE(is_tree(g));
+        g.add_vertex(1);
+        g.add_edge(0, 1);
+        EXPECT_TRUE(is_tree(g));
+        g.add_vertex(2);
+        g.add_edge(1, 2);
+        EXPECT_TRUE(is_tree(g));
+    }
+    {
+        UndirectedAdjacencyListGraph<int> g;
+        for (int i = 0; i < 3; ++i) {
+            g.add_vertex(i);
+        }
+        g.add_edge(0, 1);
+        g.add_edge(1, 2);
+        g.add_edge(0, 2);
+        EXPECT_FALSE(is_tree(g));
+    }
 }
 
 TEST(EdgarConfigSpaces, ConfigurationSpacesGenerator_nonEmptyForMatchingSquares) {
@@ -564,4 +616,38 @@ TEST(EdgarGenerator, Chain_yieldStream_matchesSingleAndCountsEvents) {
     EXPECT_EQ(baseline.layout.rooms.size(), streamed.layout.rooms.size());
     EXPECT_GE(layout_generated_events, 1);
     EXPECT_EQ(stats.layouts_generated, layout_generated_events);
+}
+
+TEST(EdgarGenerator, Golden_chainLayoutJson_nonEmpty) {
+    using namespace edgar;
+    using namespace edgar::generator::grid2d;
+    using namespace edgar::generator::common;
+
+    auto square = RoomTemplateGrid2D(edgar::geometry::PolygonGrid2D::get_square(8),
+                                     std::make_shared<SimpleDoorModeGrid2D>(1, 1));
+    auto corridor_rect =
+        RoomTemplateGrid2D(edgar::geometry::PolygonGrid2D::get_rectangle(8, 2),
+                             std::make_shared<SimpleDoorModeGrid2D>(1, 1));
+    RoomDescriptionGrid2D room_desc(false, {square});
+    RoomDescriptionGrid2D corridor_desc(true, {corridor_rect});
+
+    LevelDescriptionGrid2D<int> level;
+    level.add_room(0, room_desc);
+    level.add_room(1, corridor_desc);
+    level.add_room(2, room_desc);
+    level.add_connection(0, 1);
+    level.add_connection(1, 2);
+
+    SimulatedAnnealingConfiguration sa_config;
+    sa_config.cycles = 6;
+    sa_config.trials_per_cycle = 30;
+    sa_config.max_stage_two_failures = 4;
+
+    std::mt19937 rng(12345);
+    const auto result = ChainBasedGeneratorGrid2D<int>::generate(level, sa_config, rng);
+
+    const auto j = edgar::io::layout_to_json(result.layout);
+    ASSERT_TRUE(j.contains("rooms"));
+    EXPECT_EQ(j["rooms"].size(), result.layout.rooms.size());
+    EXPECT_FALSE(j["rooms"].empty());
 }

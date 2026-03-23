@@ -79,6 +79,9 @@ public:
             throw std::runtime_error("ChainBasedGeneratorGrid2D: chain decomposition does not cover all rooms");
         }
 
+        // C# `SimulatedAnnealingEvolver.Evolve`: when `HandleTreesGreedily` and the graph is a tree, a dedicated greedy
+        // branch runs before SA. This port always uses the chain + SA pipeline; tree levels are not special-cased.
+
         auto pick_template = [&](int room_index) {
             const TRoom id = rmap.index_to_room[static_cast<std::size_t>(room_index)];
             const auto& rd = level.get_room_description(id);
@@ -116,7 +119,15 @@ public:
         };
 
         auto emit = [&](LayoutYieldEvent ev, Grid2DLayoutState<TRoom>& st, double pen) {
-            if (!ctx || ctx->layout_stream != LayoutStreamMode::OnEachLayoutGenerated || !ctx->on_layout) {
+            if (!ctx || !ctx->on_layout) {
+                return;
+            }
+            const bool outer_stream = ctx->layout_stream == LayoutStreamMode::OnEachLayoutGenerated;
+            const bool sa_stream = ctx->layout_stream == LayoutStreamMode::OnEachSaTryCompleteChain;
+            if (!outer_stream && !sa_stream) {
+                return;
+            }
+            if (ev == LayoutYieldEvent::LayoutGenerated && !outer_stream) {
                 return;
             }
             if (ev == LayoutYieldEvent::LayoutGenerated) {
@@ -250,7 +261,7 @@ public:
 
             LayoutControllerGrid2D controller(sa_config);
             int sa_iters = 0;
-            controller.evolve(state, rng, &sa_iters);
+            controller.evolve(state, rng, &sa_iters, ctx);
             iter_count += sa_iters;
             if (ctx && ctx->stats_out) {
                 ctx->stats_out->iterations_since_last_event += sa_iters;
@@ -278,7 +289,9 @@ public:
             emit(LayoutYieldEvent::StageTwoFailure, state, last_penalty);
         }
 
-        if (!success && ctx && ctx->layout_stream == LayoutStreamMode::OnEachLayoutGenerated && ctx->on_layout) {
+        if (!success && ctx && ctx->on_layout &&
+            (ctx->layout_stream == LayoutStreamMode::OnEachLayoutGenerated ||
+             ctx->layout_stream == LayoutStreamMode::OnEachSaTryCompleteChain)) {
             emit(LayoutYieldEvent::OutOfIterations, state, last_penalty);
         }
         sync_stats_iterations();
