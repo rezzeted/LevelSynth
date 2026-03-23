@@ -8,9 +8,25 @@
 #include "edgar/geometry/polygon_grid2d.hpp"
 #include "edgar/geometry/vector2_int.hpp"
 
+#include <optional>
+#include <random>
 #include <vector>
 
 namespace edgar::generator::grid2d {
+
+/// True if `offset` lies on any segment of the configuration space (door-aligned translations, fixed at origin).
+bool offset_on_configuration_space(geometry::Vector2Int offset, const ConfigurationSpaceGrid2D& space);
+
+/// Integer points on CS segments (subsampled on very long segments). Used for sampling placements.
+std::vector<geometry::Vector2Int> enumerate_configuration_space_offsets(const ConfigurationSpaceGrid2D& space);
+
+/// C# `GetMaximumIntersection` subset: positions for `moving` so doors match all placed `neighbors` and
+/// `moving_index` does not overlap other placed rooms. `neighbor_doors[j]` = doors for `outlines[j]`.
+std::optional<geometry::Vector2Int> sample_maximum_intersection_position(
+    const geometry::PolygonGrid2D& moving, const std::vector<DoorLineGrid2D>& moving_doors,
+    const std::vector<int>& neighbor_indices, int moving_index, const std::vector<geometry::PolygonGrid2D>& outlines,
+    const std::vector<geometry::Vector2Int>& positions, const std::vector<std::vector<DoorLineGrid2D>>& neighbor_doors,
+    const std::vector<bool>& placed, std::mt19937& rng, std::size_t max_point_checks = 80);
 
 /// Facade for configuration-space queries (C# `ConfigurationSpacesGrid2D` subset + door-based generator).
 class ConfigurationSpacesGrid2D {

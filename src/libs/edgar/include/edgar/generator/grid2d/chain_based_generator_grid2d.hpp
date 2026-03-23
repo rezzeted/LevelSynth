@@ -128,6 +128,27 @@ public:
             bool ok = false;
             for (int attempt = 0; attempt < 8000; ++attempt) {
                 ++iter_count;
+                std::vector<std::vector<DoorLineGrid2D>> doors_tab(static_cast<std::size_t>(n));
+                for (int j = 0; j < n; ++j) {
+                    if (!templates[static_cast<std::size_t>(j)].has_value()) {
+                        continue;
+                    }
+                    if (j == ri || placed[static_cast<std::size_t>(j)]) {
+                        doors_tab[static_cast<std::size_t>(j)] =
+                            templates[static_cast<std::size_t>(j)]->doors().get_doors(
+                                outlines[static_cast<std::size_t>(j)]);
+                    }
+                }
+                const auto greedy_pos = LayoutControllerGrid2D::greedy_position_from_configuration_spaces(
+                    ri, level, rmap, ig, outlines[static_cast<std::size_t>(ri)],
+                    doors_tab[static_cast<std::size_t>(ri)], placed, outlines, positions, doors_tab, rng);
+                if (greedy_pos.has_value()) {
+                    positions[static_cast<std::size_t>(ri)] = *greedy_pos;
+                    placed[static_cast<std::size_t>(ri)] = true;
+                    ok = true;
+                    break;
+                }
+
                 const int dx = jitter(rng);
                 const int dy = jitter(rng);
                 const geometry::Vector2Int pos{positions[static_cast<std::size_t>(pj)].x + dx,
@@ -157,9 +178,9 @@ public:
             }
         }
 
-        LayoutControllerGrid2D evolver(sa_config);
+        LayoutControllerGrid2D controller(sa_config);
         int sa_iters = 0;
-        evolver.evolve(outlines, positions, rng, &sa_iters);
+        controller.evolve(level, rmap, ig, outlines, positions, templates, transforms, rng, &sa_iters);
         iter_count += sa_iters;
 
         LayoutGrid2D<TRoom> layout;

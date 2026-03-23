@@ -42,6 +42,7 @@ add_library(edgar STATIC
     src/geometry/clipper2_util.cpp
     src/graphs/planar_faces.cpp
     src/generator/grid2d/configuration_spaces_generator.cpp
+    src/generator/grid2d/configuration_spaces_grid2d.cpp
     src/generator/grid2d/simulated_annealing_evolver_grid2d.cpp
     src/generator/grid2d/room_template_grid2d.cpp
     src/generator/grid2d/simple_door_mode_grid2d.cpp

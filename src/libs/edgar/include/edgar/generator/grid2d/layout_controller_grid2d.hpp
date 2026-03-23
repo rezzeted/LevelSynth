@@ -1,13 +1,257 @@
 #pragma once
 
+// C# `LayoutController` subset for Grid2D: door-aware greedy placement, perturb shape vs position (0.4 / 0.6),
+// energy via `ConstraintsEvaluatorGrid2D`, SA schedule matching `SimulatedAnnealingEvolverGrid2D`.
+
+#include "edgar/generator/common/basic_energy_updater.hpp"
+#include "edgar/generator/common/simulated_annealing_configuration.hpp"
+#include "edgar/generator/grid2d/configuration_spaces_grid2d.hpp"
+#include "edgar/generator/grid2d/constraints_evaluator_grid2d.hpp"
+#include "edgar/generator/grid2d/detail/room_index_map.hpp"
+#include "edgar/generator/grid2d/door_line_grid2d.hpp"
+#include "edgar/generator/grid2d/level_description_grid2d.hpp"
+#include "edgar/generator/grid2d/room_template_grid2d.hpp"
 #include "edgar/generator/grid2d/simulated_annealing_evolver_grid2d.hpp"
+#include "edgar/graphs/undirected_graph.hpp"
+#include "edgar/geometry/transformation_grid2d.hpp"
+
+#include <cmath>
+#include <cstddef>
+#include <optional>
+#include <random>
+#include <vector>
 
 namespace edgar::generator::grid2d {
 
-/// C# `LayoutController` wires `ConstraintsEvaluator`, `IConfigurationSpaces`, greedy `AddNodeGreedily`,
-/// `PerturbLayout` / shape vs position, `TryCompleteChain` for corridors, and per-node energy updates.
-/// The Grid2D C++ port only exposes the **SA polish** step as `SimulatedAnnealingEvolverGrid2D` (cycles × trials,
-/// Metropolis on total penalty); a full controller API is **not** ported here — tracked as follow-up.
-using LayoutControllerGrid2D = SimulatedAnnealingEvolverGrid2D;
+class LayoutControllerGrid2D {
+public:
+    explicit LayoutControllerGrid2D(common::SimulatedAnnealingConfiguration config = {}) : config_(std::move(config)) {}
+
+    common::SimulatedAnnealingConfiguration& config() { return config_; }
+    const common::SimulatedAnnealingConfiguration& config() const { return config_; }
+
+    /// C# `AddNodeGreedily` / `GetMaximumIntersection` subset: sample a non-overlapping position with doors
+    /// satisfied vs all placed neighbours.
+    template <typename TRoom>
+    static std::optional<geometry::Vector2Int> greedy_position_from_configuration_spaces(
+        int room_index, const LevelDescriptionGrid2D<TRoom>& level, const detail::RoomIndexMap<TRoom>& rmap,
+        const graphs::UndirectedAdjacencyListGraph<int>& ig, const geometry::PolygonGrid2D& moving_outline,
+        const std::vector<DoorLineGrid2D>& moving_doors, const std::vector<bool>& placed,
+        const std::vector<geometry::PolygonGrid2D>& outlines, const std::vector<geometry::Vector2Int>& positions,
+        const std::vector<std::vector<DoorLineGrid2D>>& doors_at_index, std::mt19937& rng) {
+        std::vector<int> neigh;
+        for (int nb : ig.neighbours(room_index)) {
+            if (placed[static_cast<std::size_t>(nb)]) {
+                neigh.push_back(nb);
+            }
+        }
+        if (neigh.empty()) {
+            return std::nullopt;
+        }
+        const auto& rd = level.get_room_description(rmap.index_to_room[static_cast<std::size_t>(room_index)]);
+        if (rd.is_corridor() && neigh.size() < 2) {
+            // C# `AddCorridorGreedily` expects two satisfied neighbours; allow one neighbour during chain growth.
+        }
+        return sample_maximum_intersection_position(moving_outline, moving_doors, neigh, room_index, outlines,
+                                                    positions, doors_at_index, placed, rng, 120);
+    }
+
+    /// SA polish with C#-style `PerturbLayout` (shape vs position) and Metropolis schedule.
+    template <typename TRoom>
+    void evolve(const LevelDescriptionGrid2D<TRoom>& level, const detail::RoomIndexMap<TRoom>& rmap,
+                const graphs::UndirectedAdjacencyListGraph<int>& ig, std::vector<geometry::PolygonGrid2D>& outlines,
+                std::vector<geometry::Vector2Int>& positions,
+                std::vector<std::optional<RoomTemplateGrid2D>>& templates,
+                std::vector<geometry::TransformationGrid2D>& transforms, std::mt19937& rng, int* iterations_out) {
+        const int n = static_cast<int>(outlines.size());
+        if (n <= 0) {
+            if (iterations_out) {
+                *iterations_out = 0;
+            }
+            return;
+        }
+
+        std::vector<bool> is_corridor(static_cast<std::size_t>(n));
+        for (int i = 0; i < n; ++i) {
+            is_corridor[static_cast<std::size_t>(i)] =
+                level.get_room_description(rmap.index_to_room[static_cast<std::size_t>(i)]).is_corridor();
+        }
+
+        auto doors_at_index = [&]() {
+            std::vector<std::vector<DoorLineGrid2D>> tab(static_cast<std::size_t>(n));
+            for (int i = 0; i < n; ++i) {
+                const auto& ot = templates[static_cast<std::size_t>(i)];
+                if (ot.has_value()) {
+                    tab[static_cast<std::size_t>(i)] =
+                        ot->doors().get_doors(outlines[static_cast<std::size_t>(i)]);
+                }
+            }
+            return tab;
+        };
+
+        auto energy = [&]() {
+            return common::BasicEnergyUpdater::total_penalty(ConstraintsEvaluatorGrid2D::evaluate(
+                outlines, positions, level.minimum_room_distance, &is_corridor));
+        };
+
+        double e = energy();
+
+        constexpr double p0 = 0.2;
+        constexpr double p1 = 0.01;
+        double t0 = -1.0 / std::log(p0);
+        const double t1 = -1.0 / std::log(p1);
+        const int cycles = std::max(1, config_.cycles);
+        const double ratio =
+            (cycles > 1) ? std::pow(t1 / t0, 1.0 / static_cast<double>(cycles - 1)) : 0.9995;
+        double delta_e_avg = 0.0;
+        int accepted_solutions = 1;
+        double t = t0;
+
+        std::uniform_int_distribution<int> pick_room(0, n - 1);
+        std::uniform_int_distribution<int> pick_dx(-config_.max_perturbation_radius,
+                                                     config_.max_perturbation_radius);
+        std::uniform_int_distribution<int> pick_dy(-config_.max_perturbation_radius,
+                                                     config_.max_perturbation_radius);
+        std::uniform_real_distribution<double> uni01(0.0, 1.0);
+        std::uniform_real_distribution<double> shape_vs_pos(0.0, 1.0);
+
+        int iterations = 0;
+        int last_success_iteration = 0;
+
+        std::vector<bool> placed(static_cast<std::size_t>(n), true);
+
+        for (int i = 0; i < cycles; ++i) {
+            if (iterations - last_success_iteration > config_.max_iterations_without_success) {
+                break;
+            }
+            bool was_accepted = false;
+
+            for (int j = 0; j < config_.trials_per_cycle; ++j) {
+                ++iterations;
+                const int r = pick_room(rng);
+                const geometry::Vector2Int old_pos = positions[static_cast<std::size_t>(r)];
+                const geometry::PolygonGrid2D old_outline = outlines[static_cast<std::size_t>(r)];
+                const std::optional<RoomTemplateGrid2D> old_tmpl = templates[static_cast<std::size_t>(r)];
+                const geometry::TransformationGrid2D old_tr = transforms[static_cast<std::size_t>(r)];
+                bool did_shape_perturb = false;
+
+                if (shape_vs_pos(rng) < 0.4) {
+                    // C# `PerturbShape`
+                    const TRoom rid = rmap.index_to_room[static_cast<std::size_t>(r)];
+                    const auto& rd = level.get_room_description(rid);
+                    const auto& tmpls = rd.room_templates();
+                    if (!tmpls.empty()) {
+                        std::uniform_int_distribution<std::size_t> pick_t(0, tmpls.size() - 1);
+                        const RoomTemplateGrid2D& tmpl = tmpls[pick_t(rng)];
+                        const auto& trs = tmpl.allowed_transformations();
+                        geometry::TransformationGrid2D tr = geometry::TransformationGrid2D::Identity;
+                        if (!trs.empty()) {
+                            std::uniform_int_distribution<std::size_t> pick_tr(0, trs.size() - 1);
+                            tr = trs[pick_tr(rng)];
+                        }
+                        outlines[static_cast<std::size_t>(r)] = tmpl.outline().transform(tr);
+                        templates[static_cast<std::size_t>(r)] = tmpl;
+                        transforms[static_cast<std::size_t>(r)] = tr;
+                        did_shape_perturb = true;
+                    }
+                    const auto doors_tab = doors_at_index();
+                    const std::vector<DoorLineGrid2D>& my_doors = doors_tab[static_cast<std::size_t>(r)];
+                    std::vector<int> neigh;
+                    for (int nb : ig.neighbours(r)) {
+                        neigh.push_back(nb);
+                    }
+                    if (!neigh.empty() && !my_doors.empty()) {
+                        const auto np = sample_maximum_intersection_position(
+                            outlines[static_cast<std::size_t>(r)], my_doors, neigh, r, outlines, positions,
+                            doors_tab, placed, rng, 160);
+                        if (np.has_value()) {
+                            positions[static_cast<std::size_t>(r)] = *np;
+                        }
+                    }
+                } else {
+                    // C# `PerturbPosition` — sample from intersection of CS with placed neighbours
+                    const auto doors_tab = doors_at_index();
+                    const std::vector<DoorLineGrid2D>& my_doors = doors_tab[static_cast<std::size_t>(r)];
+                    std::vector<int> neigh;
+                    for (int nb : ig.neighbours(r)) {
+                        neigh.push_back(nb);
+                    }
+                    if (!neigh.empty() && !my_doors.empty()) {
+                        const auto np = sample_maximum_intersection_position(
+                            outlines[static_cast<std::size_t>(r)], my_doors, neigh, r, outlines, positions,
+                            doors_tab, placed, rng, 160);
+                        if (np.has_value()) {
+                            positions[static_cast<std::size_t>(r)] = *np;
+                        } else {
+                            positions[static_cast<std::size_t>(r)] = {
+                                old_pos.x + pick_dx(rng), old_pos.y + pick_dy(rng)};
+                        }
+                    } else {
+                        positions[static_cast<std::size_t>(r)] = {
+                            old_pos.x + pick_dx(rng), old_pos.y + pick_dy(rng)};
+                    }
+                }
+
+                const double new_e = energy();
+                const double energy_delta = new_e - e;
+                const double delta_abs = std::abs(energy_delta);
+                bool accept = false;
+                if (energy_delta > 0.0) {
+                    if (i == 0 && j == 0) {
+                        delta_e_avg = delta_abs * 15.0;
+                    }
+                    const double p = std::exp(-delta_abs / (delta_e_avg * t));
+                    if (uni01(rng) < p) {
+                        accept = true;
+                    }
+                } else {
+                    accept = true;
+                }
+
+                if (accept) {
+                    ++accepted_solutions;
+                    e = new_e;
+                    delta_e_avg = (delta_e_avg * static_cast<double>(accepted_solutions - 1) + delta_abs) /
+                                  static_cast<double>(accepted_solutions);
+                    was_accepted = true;
+                    if (e <= 0.0) {
+                        last_success_iteration = iterations;
+                    }
+                } else {
+                    positions[static_cast<std::size_t>(r)] = old_pos;
+                    if (did_shape_perturb) {
+                        outlines[static_cast<std::size_t>(r)] = old_outline;
+                        templates[static_cast<std::size_t>(r)] = old_tmpl;
+                        transforms[static_cast<std::size_t>(r)] = old_tr;
+                    }
+                }
+
+                if (e <= 0.0) {
+                    if (iterations_out) {
+                        *iterations_out = iterations;
+                    }
+                    return;
+                }
+            }
+            t *= ratio;
+            (void)was_accepted;
+        }
+
+        if (iterations_out) {
+            *iterations_out = iterations;
+        }
+    }
+
+    /// Legacy random-walk SA (no configuration spaces). Prefer `evolve(...)` with level graph for C#-like behaviour.
+    void evolve_random_walk(std::vector<geometry::PolygonGrid2D>& outlines,
+                            std::vector<geometry::Vector2Int>& positions, std::mt19937& rng,
+                            int* iterations_out) const {
+        SimulatedAnnealingEvolverGrid2D ev(config_);
+        ev.evolve(outlines, positions, rng, iterations_out);
+    }
+
+private:
+    common::SimulatedAnnealingConfiguration config_;
+};
 
 } // namespace edgar::generator::grid2d
