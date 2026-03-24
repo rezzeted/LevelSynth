@@ -8,7 +8,7 @@
 
 - **CMake** 3.20+
 - **Git** (для submodule `toolchain/vcpkg`)
-- **Компилятор** с поддержкой C++20 (на Windows — Visual Studio 2022, x64)
+- **Компилятор** с поддержкой C++20 (на Windows — Visual Studio 2022 или новее, x64; [`build_vs.bat`](build_vs.bat) ориентирован на **Visual Studio 18 2026**)
 - **OpenGL**
 - После клона: `git submodule update --init --recursive` и один раз `bootstrap-vcpkg.bat` / `bootstrap-vcpkg.sh` в `toolchain/vcpkg`
 
@@ -16,16 +16,19 @@
 
 ## Сборка (vcpkg)
 
-Укажите toolchain vcpkg при конфигурации CMake:
+Проще всего: из корня репозитория запустить [`build_vs.bat`](build_vs.bat) — он вызывает **`cmake --preset vs2026`** и **`cmake --build --preset debug`** (все пути vcpkg, triplet и overlay заданы в [`CMakePresets.json`](CMakePresets.json)).
+
+Ручная конфигурация (эквивалент по смыслу):
 
 ```batch
-cmake -S . -B _build -G "Visual Studio 17 2022" -A x64 -DCMAKE_TOOLCHAIN_FILE=%CD%\toolchain\vcpkg\scripts\buildsystems\vcpkg.cmake
+cmake -S . -B _build -G "Visual Studio 18 2026" -A x64 ^
+  -DCMAKE_TOOLCHAIN_FILE=%CD%\toolchain\vcpkg\scripts\buildsystems\vcpkg.cmake ^
+  -DVCPKG_TARGET_TRIPLET=x64-windows-static ^
+  -DVCPKG_OVERLAY_PORTS=%CD%\toolchain\vcpkg-overlay\ports
 cmake --build _build --config Debug
 ```
 
-Либо используйте пресеты [`CMakePresets.json`](CMakePresets.json): `cmake --preset vs2026`, затем `cmake --build --preset release` (triplet **`x64-windows-static`**, `CMAKE_TOOLCHAIN_FILE` и `VCPKG_OVERLAY_PORTS` заданы в пресете). Для Ninja без VS: `cmake --preset default`. Для VS 2022: пресет `vs2022` и build `debug-vs2022` / `release-vs2022`.
-
-Скрипт [`build_vs.bat`](build_vs.bat) передаёт тот же `CMAKE_TOOLCHAIN_FILE`.
+Либо пресеты [`CMakePresets.json`](CMakePresets.json): `cmake --preset vs2026`, затем `cmake --build --preset release` (triplet **`x64-windows-static`**, toolchain и overlay в пресете). Для Ninja без VS: `cmake --preset default`. Для VS 2022: пресет `vs2022` и build `debug-vs2022` / `release-vs2022`.
 
 Исполняемые файлы: `_build/bin/<Config>/main.exe`, тесты: `_build/bin/<Config>/edgar_tests.exe`.
 

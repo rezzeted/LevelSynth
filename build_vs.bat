@@ -1,21 +1,18 @@
 @echo off
-set BUILD_DIR=_build
+setlocal EnableExtensions
+cd /d "%~dp0"
 
-if not exist %BUILD_DIR% (
-    mkdir %BUILD_DIR%
-)
-
-set "TOOLCHAIN=%~dp0toolchain\vcpkg\scripts\buildsystems\vcpkg.cmake"
-cmake -S . -B %BUILD_DIR% -G "Visual Studio 17 2022" -A x64 -DCMAKE_TOOLCHAIN_FILE=%TOOLCHAIN%
+rem Toolchain, triplet, overlay: see CMakePresets.json (preset vs2026).
+cmake --preset vs2026
 if %errorlevel% neq 0 (
-    echo CMake generation failed!
-    exit /b %errorlevel%
+  echo CMake configure failed!
+  exit /b %errorlevel%
 )
 
-cmake --build %BUILD_DIR% --config Debug
+cmake --build --preset debug
 if %errorlevel% neq 0 (
-    echo Build failed!
-    exit /b %errorlevel%
+  echo Build failed!
+  exit /b %errorlevel%
 )
 
-echo Build successful!
+echo Build successful! Output: _build\bin\Debug\main.exe
