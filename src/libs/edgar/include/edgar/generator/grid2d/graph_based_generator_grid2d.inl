@@ -73,6 +73,9 @@ LayoutGrid2D<TRoom> GraphBasedGeneratorGrid2D<TRoom>::generate_layout() {
         iterations_count_ = res.iterations;
         const auto t1 = std::chrono::steady_clock::now();
         time_total_ms_ = std::chrono::duration<double, std::milli>(t1 - t0).count();
+        if (rng_.has_value()) {
+            rng_ = std::move(rng);
+        }
         return res.layout;
     }
 
@@ -146,6 +149,9 @@ LayoutGrid2D<TRoom> GraphBasedGeneratorGrid2D<TRoom>::generate_layout() {
 
     const auto t1 = std::chrono::steady_clock::now();
     time_total_ms_ = std::chrono::duration<double, std::milli>(t1 - t0).count();
+    if (rng_.has_value()) {
+        rng_ = std::move(rng);
+    }
     return result;
 }
 

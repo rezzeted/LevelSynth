@@ -58,8 +58,19 @@ cmake --build _build --config Debug
 ├── src/libs/edgar/           # библиотека edgar
 ├── src/apps/main/
 ├── src/tests/
+├── resources/edgar_gui/      # копия из референса (см. ниже)
 └── docs/EDGAR_PORT_INVENTORY.md
 ```
+
+### Ресурсы Edgar.GUI (копия из референса)
+
+Каталог [`resources/edgar_gui/`](resources/edgar_gui) — это **не** самостоятельные ассеты проекта, а **копия** дерева **`src/Resources`** из upstream [Edgar-DotNet](https://github.com/OndrejNepozitek/Edgar-DotNet) (WinForms-проект `Edgar.GUI`: `MapDescriptions`, `Maps`, `Images`, `Rooms`, `RandomGraphs` и т.д.). У себя их можно заново скопировать из локального клона референса, например:
+
+```batch
+robocopy %CD%\_edgar_ref\src\Resources %CD%\resources\edgar_gui /E
+```
+
+При сборке `main` CMake **копирует** `resources/edgar_gui` рядом с `main.exe` в `resources/edgar_gui/`, чтобы пути относительно исполняемого файла совпадали с ожидаемой раскладкой папок.
 
 ---
 
