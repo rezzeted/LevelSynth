@@ -8,6 +8,7 @@
     "sdl3",
     "stb",
     "boost-graph",
+    "yaml-cpp",
     {
       "name": "imgui",
       "features": ["docking-experimental", "sdl3-binding", "opengl3-binding"]

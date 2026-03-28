@@ -1,5 +1,7 @@
-add_executable(main main.cpp layout_preview.cpp)
-target_link_libraries(main PRIVATE imgui_impl edgar)
+find_package(yaml-cpp CONFIG REQUIRED)
+
+add_executable(main main.cpp layout_preview.cpp preset_loader.cpp)
+target_link_libraries(main PRIVATE imgui_impl edgar yaml-cpp::yaml-cpp)
 
 # Bundle Edgar.GUI-style assets (mirrors Edgar-DotNet `src/Resources`: MapDescriptions, Maps, etc.)
 set(LEVELSYNTH_EDGAR_GUI_RESOURCES "${CMAKE_SOURCE_DIR}/resources/edgar_gui")

@@ -31,11 +31,11 @@ Reference clone: `_edgar_ref/` (gitignored) — [OndrejNepozitek/Edgar-DotNet](h
 | Зависимости: vcpkg manifest | Сделано | `vcpkg.json`: nlohmann-json, fmt, spdlog, gtest, sdl3, imgui (+ docking/sdl3/opengl3), stb, **boost-graph**; **Clipper2** — исходники 2.0.1 через FetchContent (совпадение с MSVC, см. README) |
 | Сборка: CMake Presets + статический triplet | Сделано | [`CMakePresets.json`](../CMakePresets.json), `cmake --preset vs2026` + `cmake --build --preset release`; overlay [`toolchain/vcpkg-overlay`](../toolchain/vcpkg-overlay); см. [README](../README.md) |
 | Зависимость: GoogleTest | Сделано | `src/tests/CMakeLists.txt`, `find_package(GTest)`, `gtest_discover_tests` |
-| Слой Geometry (базовый) | Частично | `PolygonGrid2D`, `Vector2Int`, прямоугольник, `OrthogonalLineGrid2D` (+ `Shrink` как в C#), трансформации, `overlap` через Clipper2 |
+| Слой Geometry (базовый) | **Завершено (Grid2D L1)** | `PolygonGrid2D`, `PolygonGrid2DBuilder`, `Vector2Int`, `RectangleGrid2D`, `OrthogonalLineGrid2D` (+ `Shrink`/`Normalize` как в C#), `TransformationGrid2D` (8 transforms), `OrthogonalLineIntersection` (try_get/get/remove/partition), `overlap` через Clipper2, `clipper2_util`, `detail::integer_math` |
 | `GridPolygonPartitioning` | Сделано | Порт с Edgar-DotNet + `bipartite_matching` (König / MIS); тесты L/Plus/Another/Complex + bipartite basics |
-| Слой Graphs | Частично | `undirected_graph.hpp`; `graph_algorithms.hpp`, `planar_faces.hpp` (Boost) |
-| Grid2D API | Частично | Шаблоны комнат, описание уровня, `GraphBasedGeneratorGrid2D`, layout-типы; `SimpleDoorModeGrid2D::get_doors` по логике C# |
-| Генератор | Частично | strip / chain + SA + corridor CS + `try_complete_chain` + restarts + `Grid2DLayoutState` + yield/stats API |
+| Слой Graphs | **Завершено (Grid2D L1)** | `UndirectedAdjacencyListGraph<T>`; `is_connected`, `is_tree`, `get_planar_faces` (Boost.Graph `boyer_myrvold_planarity_test` + face traversal) — достаточно для текущего pipeline |
+| Grid2D API | **Завершено (Grid2D L1)** | `LevelDescriptionGrid2D`, `RoomDescriptionGrid2D` (is_corridor, stage), `RoomTemplateGrid2D` (outline + IDoorMode + repeat mode + allowed transforms), `SimpleDoorModeGrid2D::get_doors`, `GraphBasedGeneratorGrid2D` (strip + chain backends), `LayoutGrid2D` / `LayoutRoomGrid2D`, `Grid2DLayoutState`, `LayoutOrchestrationStats`, `ChainGenerateContext`, yield/stream modes |
+| Генератор | **Завершено (Grid2D L1)** | strip / chain + SA + corridor CS + `try_complete_chain` + restarts + `Grid2DLayoutState` + yield/stats API; цепи: `breadth_first_old` / `breadth_first_new` / `two_stage` |
 | Экспорт JSON / PNG | Сделано | `layout_json.hpp`, `dungeon_drawer` + `write_png_rgba` |
 | Тесты | Расширено | **27+** gtest: цепочки, CS, energy (в т.ч. `incident_to_room`), strip-backend, IO, 4-комнатный цикл, **цепь с коридором**, двери, **partition + bipartite**, overlap merged vs brute, `is_tree`, JSON из layout; прогон: `ctest -C Release` из `_build` |
 | Интеграция в LevelSynth | Сделано | `main` линкует `edgar`, окно генерации в ImGui |
@@ -71,7 +71,7 @@ Reference clone: `_edgar_ref/` (gitignored) — [OndrejNepozitek/Edgar-DotNet](h
 | BenchmarkUtils | Benchmarks | Not ported (optional microbench later) |
 | GraphPlanarityTesting | Planarity tests | **Boost.Graph** (`boyer_myrvold_planarity_test` + face traversal) |
 | Newtonsoft.Json | JSON | nlohmann/json |
-| RangeTree | Spatial queries | Линейный query по отрезкам в `grid_polygon_partitioning` (малые N) |
+| RangeTree | Spatial queries | Линейный query по отрезкам в `grid_polygon_grid2d` (малые N) |
 | System.Drawing.Common | PNG / `DungeonDrawer` | stb_image_write + raster |
 | YamlDotNet | YAML | Not in current port scope |
 
@@ -99,7 +99,7 @@ Reference clone: `_edgar_ref/` (gitignored) — [OndrejNepozitek/Edgar-DotNet](h
 | `TrialsPerCycle` | `trials_per_cycle` (default 100) |
 | `MaxIterationsWithoutSuccess` | `max_iterations_without_success` (default 100) |
 | `MaxStageTwoFailures` | `max_stage_two_failures` (default 10000; в Grid2D — лимит **полных перегенераций** цепи + SA + `try_complete_chain`, с cap 128 в `ChainBasedGeneratorGrid2D`) |
-| `HandleTreesGreedily` | `handle_trees_greedily` (default true; chain Grid2D не обрабатывает деревья как C#) |
+| `HandleTreesGreedily` | `handle_trees_greedly` (default true; **stub** — поле существует для API-совместимости, но жадная ветка для деревьев не реализована; chain Grid2D всегда идёт через общий pipeline) |
 | — | `max_perturbation_radius` — только C++ (случайный dx/dy) |
 
 ## C# orchestration ↔ C++ (Grid2D, референс Edgar-DotNet)

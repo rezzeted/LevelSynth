@@ -1,11 +1,10 @@
-// Minimal ImGui + SDL3 + OpenGL3 application (C++20)
-// Static link: use our main(), tell SDL we handle entry point
 #define SDL_MAIN_HANDLED
 
 #include "imgui.h"
 #include "imgui_impl_sdl3.h"
 #include "imgui_impl_opengl3.h"
 #include "layout_preview.hpp"
+#include "preset_loader.hpp"
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
 #include <SDL3/SDL_opengl.h>
@@ -16,22 +15,80 @@
 #include <vector>
 
 #include "edgar/edgar.hpp"
+#include "edgar/generator/grid2d/layout_door_computation.hpp"
+#include "edgar/io/layout_json.hpp"
 
 namespace {
 
-void run_generate_preset_cycle(int num_layouts, unsigned rng_seed, char* edgar_log, size_t log_cap,
-                               std::vector<edgar::generator::grid2d::LayoutGrid2D<int>>& out_layouts,
-                               int& out_last_rooms, double& out_last_time_ms, int& out_last_iterations) {
-    using namespace edgar;
-    using namespace edgar::generator;
+edgar::generator::grid2d::PresetCatalog g_catalog;
+bool g_catalog_loaded = false;
+int g_selected_preset = 0;
+
+edgar::generator::grid2d::GraphBasedGeneratorConfiguration g_gen_config;
+
+char g_edgar_log[512] = "Select a preset and click Generate.";
+std::vector<edgar::generator::grid2d::LayoutGrid2D<int>> g_layouts;
+int g_layout_index = 0;
+bool g_use_random_seed = false;
+int g_seed = 42;
+int g_num_layouts = 1;
+double g_last_time_ms = 0.0;
+int g_last_iterations = 0;
+int g_last_rooms = 0;
+
+bool g_compute_doors = true;
+bool g_export_pending = false;
+
+void generate_from_preset(int preset_idx, unsigned rng_seed) {
     using namespace edgar::generator::grid2d;
 
-    out_layouts.clear();
+    g_layouts.clear();
+    g_layout_index = 0;
+
+    const auto& map = g_catalog.maps[static_cast<std::size_t>(preset_idx)];
+    LevelDescriptionGrid2D<int> level = build_level_from_preset(map, g_catalog);
+
+    GraphBasedGeneratorGrid2D<int> generator(level, g_gen_config);
+    std::mt19937 rng(rng_seed);
+    generator.inject_random_generator(std::move(rng));
+
+    const int n = std::clamp(g_num_layouts, 1, 64);
+    g_layouts.reserve(static_cast<size_t>(n));
+    for (int i = 0; i < n; ++i) {
+        auto layout = generator.generate_layout();
+        if (g_compute_doors) {
+            std::mt19937 door_rng(rng_seed + static_cast<unsigned>(i));
+            auto graph = level.get_graph();
+            compute_layout_doors(layout, level, graph, door_rng);
+        }
+        g_layouts.push_back(std::move(layout));
+        g_last_rooms = static_cast<int>(g_layouts.back().rooms.size());
+        g_last_time_ms = generator.time_total_ms();
+        g_last_iterations = generator.iterations_count();
+    }
+
+    int total_doors = 0;
+    for (const auto& room : g_layouts[0].rooms) {
+        total_doors += static_cast<int>(room.doors.size());
+    }
+
+    std::snprintf(g_edgar_log, sizeof(g_edgar_log),
+                  "Generated %d layout(s) from '%s' | rooms=%d  doors=%d  time=%.2f ms  iters=%d",
+                  n, map.display_name.c_str(), g_last_rooms, total_doors,
+                  g_last_time_ms, g_last_iterations);
+}
+
+void generate_hardcoded(unsigned rng_seed) {
+    using namespace edgar;
+    using namespace edgar::generator::grid2d;
+
+    g_layouts.clear();
+    g_layout_index = 0;
 
     auto square = RoomTemplateGrid2D(geometry::PolygonGrid2D::get_square(8),
                                      std::make_shared<SimpleDoorModeGrid2D>(1, 1));
     auto rectangle = RoomTemplateGrid2D(geometry::PolygonGrid2D::get_rectangle(6, 10),
-                                          std::make_shared<SimpleDoorModeGrid2D>(1, 1));
+                                        std::make_shared<SimpleDoorModeGrid2D>(1, 1));
     RoomDescriptionGrid2D room_desc(false, {square, rectangle});
     LevelDescriptionGrid2D<int> level;
     level.add_room(0, room_desc);
@@ -43,23 +100,45 @@ void run_generate_preset_cycle(int num_layouts, unsigned rng_seed, char* edgar_l
     level.add_connection(1, 2);
     level.add_connection(2, 3);
 
-    GraphBasedGeneratorGrid2D<int> generator(level);
+    GraphBasedGeneratorGrid2D<int> generator(level, g_gen_config);
     std::mt19937 rng(rng_seed);
     generator.inject_random_generator(std::move(rng));
 
-    const int n = std::clamp(num_layouts, 1, 64);
-    out_layouts.reserve(static_cast<size_t>(n));
+    const int n = std::clamp(g_num_layouts, 1, 64);
+    g_layouts.reserve(static_cast<size_t>(n));
     for (int i = 0; i < n; ++i) {
-        const auto layout = generator.generate_layout();
-        out_layouts.push_back(layout);
-        out_last_rooms = static_cast<int>(layout.rooms.size());
-        out_last_time_ms = generator.time_total_ms();
-        out_last_iterations = generator.iterations_count();
+        auto layout = generator.generate_layout();
+        if (g_compute_doors) {
+            std::mt19937 door_rng(rng_seed + static_cast<unsigned>(i));
+            auto graph = level.get_graph();
+            compute_layout_doors(layout, level, graph, door_rng);
+        }
+        g_layouts.push_back(std::move(layout));
+        g_last_rooms = static_cast<int>(g_layouts.back().rooms.size());
+        g_last_time_ms = generator.time_total_ms();
+        g_last_iterations = generator.iterations_count();
     }
 
-    std::snprintf(edgar_log, log_cap,
-                  "layouts=%d  last: rooms=%d  time=%.2f ms  iterations=%d", n, out_last_rooms,
-                  out_last_time_ms, out_last_iterations);
+    std::snprintf(g_edgar_log, sizeof(g_edgar_log),
+                  "Generated %d layout(s) (4-room cycle) | rooms=%d  time=%.2f ms  iters=%d",
+                  n, g_last_rooms, g_last_time_ms, g_last_iterations);
+}
+
+std::string get_executable_dir() {
+    char path[1024] = {};
+#ifdef _WIN32
+    GetModuleFileNameA(nullptr, path, sizeof(path));
+    char* last_slash = strrchr(path, '\\');
+    if (last_slash) *last_slash = '\0';
+#else
+    auto len = readlink("/proc/self/exe", path, sizeof(path) - 1);
+    if (len > 0) {
+        path[len] = '\0';
+        char* last_slash = strrchr(path, '/');
+        if (last_slash) *last_slash = '\0';
+    }
+#endif
+    return std::string(path);
 }
 
 } // namespace
@@ -70,7 +149,6 @@ int main(int argc, char* argv[])
     (void)argv;
 
     SDL_SetMainReady();
-    // SDL3: SDL_Init returns true on success, false on failure
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS)) {
         (void)fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
         return 1;
@@ -83,7 +161,7 @@ int main(int argc, char* argv[])
     const int window_width = 1280;
     const int window_height = 720;
     const SDL_WindowFlags window_flags = SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE
-        | SDL_WINDOW_HIGH_PIXEL_DENSITY;  // HiDPI: request native pixel density back buffer
+        | SDL_WINDOW_HIGH_PIXEL_DENSITY;
     SDL_Window* window = SDL_CreateWindow("LevelSynth", window_width, window_height, window_flags);
     if (!window) {
         (void)fprintf(stderr, "SDL_CreateWindow failed: %s\n", SDL_GetError());
@@ -104,13 +182,11 @@ int main(int argc, char* argv[])
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
-    // HiDPI: scale fonts and viewports from DPI (backend sets DisplayFramebufferScale)
     io.ConfigFlags |= ImGuiConfigFlags_DpiEnableScaleFonts;
     io.ConfigFlags |= ImGuiConfigFlags_DpiEnableScaleViewports;
 
     ImGui::StyleColorsDark();
 
-    // Load a nice TTF font (replaces the default pixel font for crisp text)
     ImGuiIO& io_ref = ImGui::GetIO();
     ImFontConfig font_cfg;
     font_cfg.OversampleH = 2;
@@ -119,20 +195,15 @@ int main(int argc, char* argv[])
     const float font_size_px = 19.0f;
 #ifdef _WIN32
     const char* font_paths[] = {
-        "C:\\Windows\\Fonts\\segoeui.ttf",   // Segoe UI
-        "C:\\Windows\\Fonts\\seguiui.ttf",   // Segoe UI (legacy name)
+        "C:\\Windows\\Fonts\\segoeui.ttf",
+        "C:\\Windows\\Fonts\\seguiui.ttf",
         "C:\\Windows\\Fonts\\arial.ttf",
     };
-    bool font_loaded = false;
     for (const char* path : font_paths) {
-        if (io_ref.Fonts->AddFontFromFileTTF(path, font_size_px, &font_cfg) != nullptr) {
-            font_loaded = true;
+        if (io_ref.Fonts->AddFontFromFileTTF(path, font_size_px, &font_cfg) != nullptr)
             break;
-        }
     }
-    (void)font_loaded;
 #else
-    // Linux: try common system font paths
     const char* font_paths[] = {
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
         "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
@@ -147,17 +218,17 @@ int main(int argc, char* argv[])
     ImGui_ImplSDL3_InitForOpenGL(window, gl_context);
     ImGui_ImplOpenGL3_Init("#version 130");
 
-    static char edgar_log[512] = "Click Generate to run the graph-based generator (4-room cycle preset).";
-    static std::vector<edgar::generator::grid2d::LayoutGrid2D<int>> edgar_layouts;
-    static int edgar_layout_index = 0;
-    static bool use_random_seed = false;
-    static int generator_seed = 42;
-    static int number_of_layouts = 1;
-    static double last_time_ms = 0.0;
-    static int last_iterations = 0;
-    static int last_rooms = 0;
+    {
+        std::string base = get_executable_dir() + "/resources/edgar_gui";
+        try {
+            g_catalog = edgar::generator::grid2d::load_preset_catalog(base);
+            g_catalog_loaded = !g_catalog.maps.empty();
+        } catch (...) {
+            g_catalog_loaded = false;
+        }
+    }
 
-    constexpr float k_settings_panel_w = 340.0f;
+    constexpr float k_settings_panel_w = 360.0f;
 
     bool running = true;
     while (running) {
@@ -183,69 +254,145 @@ int main(int argc, char* argv[])
                              | ImGuiWindowFlags_NoBringToFrontOnFocus)) {
 
             ImGui::BeginChild("##settings", ImVec2(k_settings_panel_w, 0.0f), true);
-            ImGui::SeparatorText("Main settings");
-            ImGui::TextUnformatted("Preset: 4-room cycle");
+
+            ImGui::SeparatorText("Preset");
+            if (g_catalog_loaded) {
+                const int n_maps = static_cast<int>(g_catalog.maps.size());
+                g_selected_preset = std::clamp(g_selected_preset, 0, n_maps - 1);
+                const auto& cur = g_catalog.maps[static_cast<std::size_t>(g_selected_preset)];
+
+                if (ImGui::BeginCombo("Map", cur.display_name.c_str())) {
+                    for (int i = 0; i < n_maps; ++i) {
+                        const bool selected = (i == g_selected_preset);
+                        if (ImGui::Selectable(g_catalog.maps[static_cast<std::size_t>(i)].display_name.c_str(), selected)) {
+                            g_selected_preset = i;
+                        }
+                        if (selected) ImGui::SetItemDefaultFocus();
+                    }
+                    ImGui::EndCombo();
+                }
+
+                ImGui::Text("Rooms: %d-%d | Passages: %d",
+                    cur.room_from, cur.room_to, static_cast<int>(cur.passages.size()));
+                ImGui::Text("Corridors: %s", cur.corridors_enabled ? "Yes" : "No");
+            } else {
+                ImGui::TextUnformatted("No presets found (resources/edgar_gui)");
+                ImGui::TextUnformatted("Using built-in 4-room cycle");
+            }
             ImGui::Spacing();
 
-            ImGui::Checkbox("Random seed", &use_random_seed);
-            if (!use_random_seed) {
-                ImGui::InputInt("Seed", &generator_seed);
+            ImGui::SeparatorText("Generation");
+            ImGui::Checkbox("Random seed", &g_use_random_seed);
+            if (!g_use_random_seed) {
+                ImGui::InputInt("Seed", &g_seed);
             }
-            ImGui::InputInt("Number of layouts", &number_of_layouts);
-            number_of_layouts = std::clamp(number_of_layouts, 1, 64);
+            ImGui::InputInt("Layouts", &g_num_layouts);
+            g_num_layouts = std::clamp(g_num_layouts, 1, 64);
+            ImGui::Checkbox("Compute doors", &g_compute_doors);
+            ImGui::Spacing();
+
+            auto& sa = g_gen_config.simulated_annealing;
+            ImGui::SeparatorText("SA Configuration");
+            ImGui::InputInt("Cycles", &sa.cycles);
+            sa.cycles = std::max(sa.cycles, 1);
+            ImGui::InputInt("Trials/cycle", &sa.trials_per_cycle);
+            sa.trials_per_cycle = std::max(sa.trials_per_cycle, 1);
+            ImGui::InputInt("Max iters w/o success", &sa.max_iterations_without_success);
+            sa.max_iterations_without_success = std::max(sa.max_iterations_without_success, 1);
+            ImGui::InputInt("Max stage2 failures", &sa.max_stage_two_failures);
+            sa.max_stage_two_failures = std::max(sa.max_stage_two_failures, 1);
+            ImGui::InputInt("Max perturb radius", &sa.max_perturbation_radius);
+            sa.max_perturbation_radius = std::max(sa.max_perturbation_radius, 1);
+            ImGui::Checkbox("Handle trees greedily", &sa.handle_trees_greedily);
 
             if (ImGui::Button("Generate", ImVec2(-1.0f, 0.0f))) {
                 try {
                     unsigned seed = 0;
-                    if (use_random_seed) {
+                    if (g_use_random_seed) {
                         std::random_device rd;
                         seed = rd();
                     } else {
-                        seed = static_cast<unsigned>(generator_seed);
+                        seed = static_cast<unsigned>(g_seed);
                     }
 
-                    run_generate_preset_cycle(number_of_layouts, seed, edgar_log, sizeof edgar_log, edgar_layouts,
-                                              last_rooms, last_time_ms, last_iterations);
-                    edgar_layout_index = 0;
+                    if (g_catalog_loaded) {
+                        generate_from_preset(g_selected_preset, seed);
+                    } else {
+                        generate_hardcoded(seed);
+                    }
                 } catch (const std::exception& e) {
-                    std::snprintf(edgar_log, sizeof edgar_log, "Error: %s", e.what());
-                    edgar_layouts.clear();
-                    edgar_layout_index = 0;
-                    last_rooms = -1;
+                    std::snprintf(g_edgar_log, sizeof(g_edgar_log), "Error: %s", e.what());
+                    g_layouts.clear();
+                    g_layout_index = 0;
+                    g_last_rooms = -1;
                 }
             }
+
+            ImGui::Spacing();
+            if (!g_layouts.empty()) {
+                if (ImGui::Button("Export JSON", ImVec2(-1.0f, 0.0f))) {
+                    g_export_pending = true;
+                }
+            }
+
             ImGui::EndChild();
 
             ImGui::SameLine();
 
             ImGui::BeginChild("##canvas", ImVec2(0.0f, 0.0f), true);
             ImGui::SeparatorText("Generator");
-            ImGui::TextWrapped("%s", edgar_log);
-            if (last_rooms >= 0 && !edgar_layouts.empty()) {
-                ImGui::Text("Last: time=%.2f ms  iterations=%d  rooms=%d", last_time_ms, last_iterations,
-                            last_rooms);
+            ImGui::TextWrapped("%s", g_edgar_log);
+
+            if (g_layouts.size() > 1) {
+                const int max_i = static_cast<int>(g_layouts.size()) - 1;
+                g_layout_index = std::clamp(g_layout_index, 0, max_i);
+                ImGui::SliderInt("Shown layout", &g_layout_index, 0, max_i);
             }
 
-            if (edgar_layouts.size() > 1) {
-                const int max_i = static_cast<int>(edgar_layouts.size()) - 1;
-                edgar_layout_index = std::clamp(edgar_layout_index, 0, max_i);
-                ImGui::SliderInt("Shown layout", &edgar_layout_index, 0, max_i);
-            }
+            if (!g_layouts.empty() && g_layout_index >= 0
+                && g_layout_index < static_cast<int>(g_layouts.size())
+                && !g_layouts[static_cast<size_t>(g_layout_index)].rooms.empty()) {
 
-            if (!edgar_layouts.empty() && edgar_layout_index >= 0
-                && edgar_layout_index < static_cast<int>(edgar_layouts.size())
-                && !edgar_layouts[static_cast<size_t>(edgar_layout_index)].rooms.empty()) {
+                const auto& shown = g_layouts[static_cast<size_t>(g_layout_index)];
+
                 ImGui::Separator();
-                ImGui::TextUnformatted("Layout preview (orthogonal outlines, corridors highlighted):");
-                draw_layout_preview_imgui(edgar_layouts[static_cast<size_t>(edgar_layout_index)]);
+                int total_doors = 0;
+                for (const auto& room : shown.rooms) {
+                    total_doors += static_cast<int>(room.doors.size());
+                }
+                ImGui::Text("Layout %d/%d  |  rooms=%d  doors=%d",
+                    g_layout_index + 1, static_cast<int>(g_layouts.size()),
+                    static_cast<int>(shown.rooms.size()), total_doors);
+
+                ImGui::TextUnformatted("Layout preview (corridors in blue):");
+                draw_layout_preview_imgui(shown);
             }
             ImGui::EndChild();
         }
         ImGui::End();
 
+        if (g_export_pending && !g_layouts.empty()) {
+            g_export_pending = false;
+            try {
+                const auto& layout = g_layouts[static_cast<size_t>(g_layout_index)];
+                auto j = edgar::io::layout_to_json(layout);
+                std::string json_str = j.dump(2);
+                std::string filename = "layout_export.json";
+                auto f = fopen(filename.c_str(), "w");
+                if (f) {
+                    fwrite(json_str.data(), 1, json_str.size(), f);
+                    fclose(f);
+                    std::snprintf(g_edgar_log, sizeof(g_edgar_log),
+                                  "Exported layout to %s (%d rooms)", filename.c_str(),
+                                  static_cast<int>(layout.rooms.size()));
+                }
+            } catch (const std::exception& e) {
+                std::snprintf(g_edgar_log, sizeof(g_edgar_log), "Export error: %s", e.what());
+            }
+        }
+
         ImGui::Render();
         SDL_GL_MakeCurrent(window, gl_context);
-        // HiDPI: use framebuffer size in pixels, not logical DisplaySize
         const int fb_w = (int)(io.DisplaySize.x * io.DisplayFramebufferScale.x);
         const int fb_h = (int)(io.DisplaySize.y * io.DisplayFramebufferScale.y);
         glViewport(0, 0, fb_w, fb_h);

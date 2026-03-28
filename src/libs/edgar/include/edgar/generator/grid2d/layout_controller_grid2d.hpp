@@ -1,7 +1,12 @@
 #pragma once
 
-// C# `LayoutController` subset for Grid2D: door-aware greedy placement, perturb shape vs position (0.4 / 0.6),
-// energy via `ConstraintsEvaluatorGrid2D`, SA schedule matching `SimulatedAnnealingEvolverGrid2D`.
+// C# `LayoutController` / `SimulatedAnnealingEvolver` subset for Grid2D:
+// door-aware greedy placement, perturb shape vs position (0.4 / 0.6),
+// energy via `ConstraintsEvaluatorGrid2D`, SA schedule matching C#.
+//
+// L2 paritet: inner loop order is Perturb -> IsLayoutValid -> IsDifferentEnough ->
+// TryCompleteChain on clone -> yield -> Metropolis (independent).
+// Random restarts via ShouldRestart(numberOfFailures).
 
 #include "edgar/generator/common/basic_energy_updater.hpp"
 #include "edgar/generator/common/simulated_annealing_configuration.hpp"
@@ -17,9 +22,11 @@
 #include "edgar/graphs/undirected_graph.hpp"
 #include "edgar/geometry/transformation_grid2d.hpp"
 
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <cstddef>
+#include <limits>
 #include <optional>
 #include <random>
 #include <vector>
@@ -33,8 +40,6 @@ public:
     common::SimulatedAnnealingConfiguration& config() { return config_; }
     const common::SimulatedAnnealingConfiguration& config() const { return config_; }
 
-    /// C# `AddNodeGreedily` / `GetMaximumIntersection` subset: sample a non-overlapping position with doors
-    /// satisfied vs all placed neighbours.
     template <typename TRoom>
     static std::optional<geometry::Vector2Int> greedy_position_from_configuration_spaces(
         int room_index, const LevelDescriptionGrid2D<TRoom>& level, const detail::RoomIndexMap<TRoom>& rmap,
@@ -52,9 +57,6 @@ public:
             return std::nullopt;
         }
         const auto& rd = level.get_room_description(rmap.index_to_room[static_cast<std::size_t>(room_index)]);
-        if (rd.is_corridor() && neigh.size() < 2) {
-            // C# `AddCorridorGreedily` expects two satisfied neighbours; allow one neighbour during chain growth.
-        }
         std::vector<bool> corridor_by_index(placed.size());
         for (std::size_t i = 0; i < placed.size(); ++i) {
             corridor_by_index[i] =
@@ -65,7 +67,6 @@ public:
             rd.is_corridor(), &corridor_by_index);
     }
 
-    /// Reposition corridor rooms using door-aware CS (after main chain or before SA).
     template <typename TRoom>
     static void polish_corridor_positions(const LevelDescriptionGrid2D<TRoom>& level,
                                           const detail::RoomIndexMap<TRoom>& rmap,
@@ -100,7 +101,6 @@ public:
         }
     }
 
-    /// C# `TryCompleteChain` subset: greedy sweeps until zero penalty or no progress / pass limit.
     template <typename TRoom>
     static bool try_complete_chain(const LevelDescriptionGrid2D<TRoom>& level,
                                    const detail::RoomIndexMap<TRoom>& rmap,
@@ -167,9 +167,6 @@ public:
         return total_penalty() <= 0.0;
     }
 
-    /// SA polish with C#-style `PerturbLayout` (shape vs position) and Metropolis schedule.
-    /// When `ctx->layout_stream == OnEachSaTryCompleteChain` and `state_for_inner_clone` is set, runs C#-style
-    /// `TryCompleteChain` on a clone after each accepted perturb (approximates `SimulatedAnnealingEvolver` inner loop).
     template <typename TRoom>
     void evolve(const LevelDescriptionGrid2D<TRoom>& level, const detail::RoomIndexMap<TRoom>& rmap,
                 const graphs::UndirectedAdjacencyListGraph<int>& ig, std::vector<geometry::PolygonGrid2D>& outlines,
@@ -209,7 +206,13 @@ public:
                 outlines, positions, level.minimum_room_distance, &is_corridor));
         };
 
+        auto overlap_total = [&]() {
+            return ConstraintsEvaluatorGrid2D::evaluate(
+                outlines, positions, level.minimum_room_distance, &is_corridor).overlap_penalty;
+        };
+
         double e = energy();
+        double total_overlap = overlap_total();
 
         constexpr double p0 = 0.2;
         constexpr double p1 = 0.01;
@@ -231,21 +234,82 @@ public:
         std::uniform_real_distribution<double> shape_vs_pos(0.0, 1.0);
 
         int iterations = 0;
-        int last_success_iteration = 0;
+        int last_event_iterations = 0;
         int inner_tcc_iters_sum = 0;
         int inner_layouts_emitted = 0;
+        int number_of_failures = 0;
+        int stage_two_failures = 0;
+        bool should_stop = false;
 
         std::vector<bool> placed(static_cast<std::size_t>(n), true);
 
+        auto bb_center = [](const geometry::PolygonGrid2D& poly) -> geometry::Vector2Int {
+            const auto& pts = poly.points();
+            if (pts.empty()) return {0, 0};
+            int min_x = pts[0].x, max_x = pts[0].x;
+            int min_y = pts[0].y, max_y = pts[0].y;
+            for (std::size_t k = 1; k < pts.size(); ++k) {
+                min_x = std::min(min_x, pts[k].x);
+                max_x = std::max(max_x, pts[k].x);
+                min_y = std::min(min_y, pts[k].y);
+                max_y = std::max(max_y, pts[k].y);
+            }
+            return {(min_x + max_x) / 2, (min_y + max_y) / 2};
+        };
+
+        double avg_size = compute_average_room_size(level, rmap);
+
+        struct RoomSnapshot {
+            geometry::Vector2Int center;
+            const RoomTemplateGrid2D* tmpl;
+        };
+
+        std::vector<std::vector<RoomSnapshot>> yielded_snapshots;
+
+        auto make_snapshot = [&]() -> std::vector<RoomSnapshot> {
+            std::vector<RoomSnapshot> snap(static_cast<std::size_t>(n));
+            for (int idx = 0; idx < n; ++idx) {
+                const auto lc = bb_center(outlines[static_cast<std::size_t>(idx)]);
+                const auto& pos = positions[static_cast<std::size_t>(idx)];
+                snap[static_cast<std::size_t>(idx)] = {
+                    {pos.x + lc.x, pos.y + lc.y},
+                    templates[static_cast<std::size_t>(idx)].has_value()
+                        ? &*templates[static_cast<std::size_t>(idx)] : nullptr
+                };
+            }
+            return snap;
+        };
+
+        auto is_different_enough = [&](const std::vector<RoomSnapshot>& candidate) -> bool {
+            if (yielded_snapshots.empty()) return true;
+            for (const auto& prev : yielded_snapshots) {
+                double diff = 0.0;
+                for (int idx = 0; idx < n; ++idx) {
+                    const auto& c = candidate[static_cast<std::size_t>(idx)];
+                    const auto& p = prev[static_cast<std::size_t>(idx)];
+                    double center_dist = static_cast<double>(
+                        std::abs(c.center.x - p.center.x) + std::abs(c.center.y - p.center.y));
+                    double weight = (c.tmpl == p.tmpl) ? 1.0 : 4.0;
+                    diff += std::pow(5.0 * center_dist / avg_size, 2.0) * weight;
+                }
+                diff /= static_cast<double>(n);
+                if (0.4 * diff < 1.0) return false;
+            }
+            return true;
+        };
+
         auto emit_sa = [&](LayoutYieldEvent ev, const Grid2DLayoutState<TRoom>& st, double pen) {
-            if (!ctx || ctx->layout_stream != LayoutStreamMode::OnEachSaTryCompleteChain || !ctx->on_layout) {
+            if (!ctx || !ctx->on_layout) {
                 return;
             }
-            if (ctx->max_layout_yields > 0 && inner_layouts_emitted >= ctx->max_layout_yields &&
-                ev == LayoutYieldEvent::LayoutGenerated) {
+            const bool sa_stream = ctx->layout_stream == LayoutStreamMode::OnEachSaTryCompleteChain;
+            if (ev == LayoutYieldEvent::LayoutGenerated && !sa_stream) {
                 return;
             }
             if (ev == LayoutYieldEvent::LayoutGenerated) {
+                if (ctx->max_layout_yields > 0 && inner_layouts_emitted >= ctx->max_layout_yields) {
+                    return;
+                }
                 ++inner_layouts_emitted;
             }
             LayoutYieldInfo info;
@@ -253,7 +317,7 @@ public:
             info.iterations_total = iterations + inner_tcc_iters_sum;
             info.energy = pen;
             if (ctx->stats_out) {
-                info.iterations_since_last_event = ctx->stats_out->iterations_since_last_event;
+                info.iterations_since_last_event = iterations + inner_tcc_iters_sum - last_event_iterations;
                 info.layouts_generated = ctx->stats_out->layouts_generated;
                 info.chain_number = ctx->stats_out->chain_number;
                 ctx->stats_out->iterations_total = iterations + inner_tcc_iters_sum;
@@ -270,12 +334,32 @@ public:
         };
 
         for (int i = 0; i < cycles; ++i) {
-            if (iterations - last_success_iteration > config_.max_iterations_without_success) {
+            if (should_restart(number_of_failures, rng)) {
+                if (state_for_inner_clone) {
+                    emit_sa(LayoutYieldEvent::RandomRestart, *state_for_inner_clone, e);
+                }
+                if (iterations_out) {
+                    *iterations_out = iterations + inner_tcc_iters_sum;
+                }
+                return;
+            }
+
+            if (iterations - last_event_iterations > config_.max_iterations_without_success) {
                 break;
             }
+
+            if (should_stop) {
+                break;
+            }
+
             bool was_accepted = false;
 
             for (int j = 0; j < config_.trials_per_cycle; ++j) {
+                if (stage_two_failures > config_.max_stage_two_failures) {
+                    should_stop = true;
+                    break;
+                }
+
                 ++iterations;
                 const int r = pick_room(rng);
                 const geometry::Vector2Int old_pos = positions[static_cast<std::size_t>(r)];
@@ -297,7 +381,6 @@ public:
 #endif
 
                 if (shape_vs_pos(rng) < 0.4) {
-                    // C# `PerturbShape`
                     const TRoom rid = rmap.index_to_room[static_cast<std::size_t>(r)];
                     const auto& rd = level.get_room_description(rid);
                     const auto& tmpls = rd.room_templates();
@@ -330,7 +413,6 @@ public:
                         }
                     }
                 } else {
-                    // C# `PerturbPosition` — sample from intersection of CS with placed neighbours
                     const auto doors_tab = doors_at_index();
                     const std::vector<DoorLineGrid2D>& my_doors = doors_tab[static_cast<std::size_t>(r)];
                     std::vector<int> neigh;
@@ -359,6 +441,42 @@ public:
                 const double new_e =
                     e - incident_old_tot + common::BasicEnergyUpdater::total_penalty(incident_new);
                 const double energy_delta = new_e - e;
+
+                // C# order: IsLayoutValid -> IsDifferentEnough -> TryCompleteChain on clone -> yield
+                // BEFORE Metropolis (which is independent).
+                const double new_overlap = total_overlap - incident_old.overlap_penalty + incident_new.overlap_penalty;
+                const bool is_valid = (new_overlap <= 0.0);
+
+                if (is_valid) {
+                    auto snap = make_snapshot();
+                    if (is_different_enough(snap)) {
+                        if (state_for_inner_clone) {
+                            Grid2DLayoutState<TRoom> cl = state_for_inner_clone->clone();
+                            int tcc_iters = 0;
+                            const int tcc_pass = std::min(64, std::max(8, n));
+                            const bool tcc_ok =
+                                try_complete_chain(cl, rng, tcc_pass, &tcc_iters);
+                            inner_tcc_iters_sum += tcc_iters;
+                            if (ctx && ctx->stats_out) {
+                                ctx->stats_out->iterations_since_last_event += tcc_iters;
+                            }
+                            const double pen_after =
+                                common::BasicEnergyUpdater::total_penalty(ConstraintsEvaluatorGrid2D::evaluate(
+                                    cl.outlines, cl.positions, level.minimum_room_distance, &is_corridor));
+                            if (tcc_ok) {
+                                yielded_snapshots.push_back(std::move(snap));
+                                emit_sa(LayoutYieldEvent::LayoutGenerated, cl, pen_after);
+                                last_event_iterations = iterations + inner_tcc_iters_sum;
+                                stage_two_failures = 0;
+                            } else {
+                                stage_two_failures++;
+                                emit_sa(LayoutYieldEvent::StageTwoFailure, cl, pen_after);
+                            }
+                        }
+                    }
+                }
+
+                // Metropolis accept/reject (independent of TCC above)
                 const double delta_abs = std::abs(energy_delta);
                 bool accept = false;
                 if (energy_delta > 0.0) {
@@ -376,32 +494,10 @@ public:
                 if (accept) {
                     ++accepted_solutions;
                     e = new_e;
+                    total_overlap = new_overlap;
                     delta_e_avg = (delta_e_avg * static_cast<double>(accepted_solutions - 1) + delta_abs) /
                                   static_cast<double>(accepted_solutions);
                     was_accepted = true;
-                    if (e <= 0.0) {
-                        last_success_iteration = iterations;
-                    }
-                    if (ctx && state_for_inner_clone &&
-                        ctx->layout_stream == LayoutStreamMode::OnEachSaTryCompleteChain && ctx->on_layout) {
-                        Grid2DLayoutState<TRoom> cl = state_for_inner_clone->clone();
-                        int tcc_iters = 0;
-                        const int tcc_pass = std::min(64, std::max(8, n));
-                        const bool tcc_ok =
-                            try_complete_chain(cl, rng, tcc_pass, &tcc_iters);
-                        inner_tcc_iters_sum += tcc_iters;
-                        if (ctx->stats_out) {
-                            ctx->stats_out->iterations_since_last_event += tcc_iters;
-                        }
-                        const double pen_after =
-                            common::BasicEnergyUpdater::total_penalty(ConstraintsEvaluatorGrid2D::evaluate(
-                                cl.outlines, cl.positions, level.minimum_room_distance, &is_corridor));
-                        if (tcc_ok) {
-                            emit_sa(LayoutYieldEvent::LayoutGenerated, cl, pen_after);
-                        } else {
-                            emit_sa(LayoutYieldEvent::StageTwoFailure, cl, pen_after);
-                        }
-                    }
                 } else {
                     positions[static_cast<std::size_t>(r)] = old_pos;
                     if (did_shape_perturb) {
@@ -418,8 +514,15 @@ public:
                     return;
                 }
             }
+
+            if (!was_accepted) {
+                number_of_failures++;
+            }
             t *= ratio;
-            (void)was_accepted;
+        }
+
+        if (state_for_inner_clone && ctx && ctx->on_layout) {
+            emit_sa(LayoutYieldEvent::OutOfIterations, *state_for_inner_clone, e);
         }
 
         if (iterations_out) {
@@ -427,7 +530,6 @@ public:
         }
     }
 
-    /// Legacy random-walk SA (no configuration spaces). Prefer `evolve(...)` with level graph for C#-like behaviour.
     void evolve_random_walk(std::vector<geometry::PolygonGrid2D>& outlines,
                             std::vector<geometry::Vector2Int>& positions, std::mt19937& rng,
                             int* iterations_out) const {
@@ -435,7 +537,6 @@ public:
         ev.evolve(outlines, positions, rng, iterations_out);
     }
 
-    /// `ILayout`-style façade: delegates to vector-based overloads on `Grid2DLayoutState`.
     template <typename TRoom>
     static void polish_corridor_positions(Grid2DLayoutState<TRoom>& state, std::mt19937& rng) {
         polish_corridor_positions(*state.level, state.rmap, state.ig, state.outlines, state.positions, state.templates,
@@ -458,6 +559,44 @@ public:
 
 private:
     common::SimulatedAnnealingConfiguration config_;
+
+    static bool should_restart(int number_of_failures, std::mt19937& rng) {
+        std::uniform_int_distribution<int> dist;
+        if (number_of_failures > 8 && dist(rng, std::uniform_int_distribution<int>::param_type{0, 1}) == 0)
+            return true;
+        if (number_of_failures > 6 && dist(rng, std::uniform_int_distribution<int>::param_type{0, 2}) == 0)
+            return true;
+        if (number_of_failures > 4 && dist(rng, std::uniform_int_distribution<int>::param_type{0, 4}) == 0)
+            return true;
+        if (number_of_failures > 2 && dist(rng, std::uniform_int_distribution<int>::param_type{0, 6}) == 0)
+            return true;
+        return false;
+    }
+
+    template <typename TRoom>
+    static double compute_average_room_size(const LevelDescriptionGrid2D<TRoom>& level,
+                                             const detail::RoomIndexMap<TRoom>& rmap) {
+        double total = 0.0;
+        int count = 0;
+        for (std::size_t i = 0; i < rmap.index_to_room.size(); ++i) {
+            const auto& rd = level.get_room_description(rmap.index_to_room[i]);
+            for (const auto& tmpl : rd.room_templates()) {
+                const auto& pts = tmpl.outline().points();
+                if (pts.empty()) continue;
+                int min_x = pts[0].x, max_x = pts[0].x;
+                int min_y = pts[0].y, max_y = pts[0].y;
+                for (std::size_t k = 1; k < pts.size(); ++k) {
+                    min_x = std::min(min_x, pts[k].x);
+                    max_x = std::max(max_x, pts[k].x);
+                    min_y = std::min(min_y, pts[k].y);
+                    max_y = std::max(max_y, pts[k].y);
+                }
+                total += static_cast<double>((max_x - min_x) + (max_y - min_y)) / 2.0;
+                ++count;
+            }
+        }
+        return (count > 0) ? total / static_cast<double>(count) : 10.0;
+    }
 };
 
 } // namespace edgar::generator::grid2d

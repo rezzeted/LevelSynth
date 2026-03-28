@@ -54,6 +54,13 @@ bool OrthogonalLineGrid2D::contains_point(Vector2Int p) const {
     return false;
 }
 
+int OrthogonalLineGrid2D::index_of_point(Vector2Int p) const {
+    if (!contains_point(p)) {
+        return -1;
+    }
+    return Vector2Int::manhattan_distance(from, p);
+}
+
 OrthogonalDirection OrthogonalLineGrid2D::get_direction() const {
     if (from.x == to.x && from.y == to.y) {
         return OrthogonalDirection::Undefined;

@@ -79,8 +79,8 @@ public:
             throw std::runtime_error("ChainBasedGeneratorGrid2D: chain decomposition does not cover all rooms");
         }
 
-        // C# `SimulatedAnnealingEvolver.Evolve`: when `HandleTreesGreedily` and the graph is a tree, a dedicated greedy
-        // branch runs before SA. This port always uses the chain + SA pipeline; tree levels are not special-cased.
+        const bool is_tree_graph = edgar::graphs::is_tree(ig);
+        const bool use_greedy_tree = sa_config.handle_trees_greedily && is_tree_graph;
 
         auto pick_template = [&](int room_index) {
             const TRoom id = rmap.index_to_room[static_cast<std::size_t>(room_index)];
@@ -259,12 +259,14 @@ public:
 
             LayoutControllerGrid2D::polish_corridor_positions(state, rng);
 
-            LayoutControllerGrid2D controller(sa_config);
-            int sa_iters = 0;
-            controller.evolve(state, rng, &sa_iters, ctx);
-            iter_count += sa_iters;
-            if (ctx && ctx->stats_out) {
-                ctx->stats_out->iterations_since_last_event += sa_iters;
+            if (!use_greedy_tree) {
+                LayoutControllerGrid2D controller(sa_config);
+                int sa_iters = 0;
+                controller.evolve(state, rng, &sa_iters, ctx);
+                iter_count += sa_iters;
+                if (ctx && ctx->stats_out) {
+                    ctx->stats_out->iterations_since_last_event += sa_iters;
+                }
             }
 
             int tcc_iters = 0;

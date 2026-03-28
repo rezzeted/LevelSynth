@@ -45,6 +45,7 @@ cmake --build _build --config Debug
 | Порт | Назначение |
 |------|------------|
 | nlohmann-json, fmt, spdlog, stb | edgar: JSON, логи, PNG |
+| boost-graph | edgar: планарные грани, проверка планарности (Boost.Graph) |
 | gtest | тесты |
 | sdl3, imgui (+ docking, sdl3, opengl3) | окно и ImGui |
 

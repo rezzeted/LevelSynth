@@ -22,6 +22,7 @@ ConfigurationSpaceGrid2D ConfigurationSpacesGenerator::get_configuration_space(
     std::vector<DoorLineGrid2D> door_lines_f = merge_door_lines(door_lines_fixed);
 
     std::vector<geometry::OrthogonalLineGrid2D> configuration_space_lines;
+    std::vector<std::pair<geometry::OrthogonalLineGrid2D, DoorLineGrid2D>> reverse_door;
 
     std::array<std::vector<DoorLineGrid2D>, 5> lines_by_dir{};
     for (const auto& d : door_lines_f) {
@@ -49,12 +50,18 @@ ConfigurationSpaceGrid2D ConfigurationSpacesGenerator::get_configuration_space(
 
             if (offsets == nullptr) {
                 geometry::OrthogonalLineGrid2D result_line(from, to);
-                configuration_space_lines.push_back(result_line.rotate(-rotation));
+                result_line = result_line.rotate(-rotation);
+                reverse_door.emplace_back(result_line,
+                    DoorLineGrid2D{.line = cline.rotate(-rotation), .length = c_door_line_fixed.length});
+                configuration_space_lines.push_back(result_line);
             } else {
                 for (int offset : *offsets) {
                     const geometry::Vector2Int offset_vector{0, offset};
                     geometry::OrthogonalLineGrid2D result_line(from - offset_vector, to - offset_vector);
-                    configuration_space_lines.push_back(result_line.rotate(-rotation));
+                    result_line = result_line.rotate(-rotation);
+                    reverse_door.emplace_back(result_line,
+                        DoorLineGrid2D{.line = cline.rotate(-rotation), .length = c_door_line_fixed.length});
+                    configuration_space_lines.push_back(result_line);
                 }
             }
         }
@@ -65,7 +72,7 @@ ConfigurationSpaceGrid2D ConfigurationSpacesGenerator::get_configuration_space(
 
     configuration_space_lines = geometry::OrthogonalLineIntersection::remove_intersections(configuration_space_lines);
 
-    return ConfigurationSpaceGrid2D{std::move(configuration_space_lines)};
+    return ConfigurationSpaceGrid2D{std::move(configuration_space_lines), std::move(reverse_door)};
 }
 
 ConfigurationSpaceGrid2D ConfigurationSpacesGenerator::get_configuration_space_over_corridor(
@@ -124,7 +131,7 @@ ConfigurationSpaceGrid2D ConfigurationSpacesGenerator::get_configuration_space_o
 
     configuration_space_lines = geometry::OrthogonalLineIntersection::remove_intersections(configuration_space_lines);
 
-    return ConfigurationSpaceGrid2D{std::move(configuration_space_lines)};
+    return ConfigurationSpaceGrid2D{std::move(configuration_space_lines), {}};
 }
 
 } // namespace edgar::generator::grid2d

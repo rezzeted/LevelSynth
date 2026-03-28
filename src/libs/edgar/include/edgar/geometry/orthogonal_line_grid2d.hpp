@@ -36,6 +36,12 @@ struct OrthogonalLineGrid2D {
     /// Whether `p` lies on this closed orthogonal segment (inclusive).
     bool contains_point(Vector2Int p) const;
 
+    /// Returns 0-based index of `p` along the line, or -1 if not on the segment (C# `Contains`).
+    int index_of_point(Vector2Int p) const;
+
+    /// Returns the n-th point along the line (C# `GetNthPoint`).
+    Vector2Int nth_point(int n) const { return from + direction_vector() * n; }
+
     /// Clockwise rotation around the origin (same convention as C# / Vector2Int::rotate_around_center).
     OrthogonalLineGrid2D rotate(int degrees_clockwise) const;
 
