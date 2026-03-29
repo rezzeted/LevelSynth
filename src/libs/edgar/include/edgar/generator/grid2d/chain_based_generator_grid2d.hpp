@@ -3,6 +3,7 @@
 #include "edgar/chain_decompositions/breadth_first_chain_decomposition.hpp"
 #include "edgar/chain_decompositions/breadth_first_chain_decomposition_old.hpp"
 #include "edgar/chain_decompositions/two_stage_chain_decomposition.hpp"
+#include "edgar/generator/common/sa_configuration_provider.hpp"
 #include "edgar/generator/common/simulated_annealing_configuration.hpp"
 #include "edgar/generator/grid2d/graph_based_generator_configuration.hpp"
 #include "edgar/generator/grid2d/configuration_spaces_grid2d.hpp"
@@ -39,7 +40,8 @@ public:
                            std::mt19937& rng,
                            ChainDecompositionStrategy chain_strategy = ChainDecompositionStrategy::breadth_first_old,
                            chain_decompositions::ChainDecompositionConfiguration chain_cfg = {},
-                           const ChainGenerateContext<TRoom>* ctx = nullptr) {
+                           const ChainGenerateContext<TRoom>* ctx = nullptr,
+                           const common::SAConfigurationProvider* sa_provider = nullptr) {
         Grid2DLayoutState<TRoom> state(level);
         const detail::RoomIndexMap<TRoom>& rmap = state.rmap;
         const auto& ig = state.ig;
@@ -268,7 +270,8 @@ public:
 
             if (!use_greedy_tree) {
                 for (const auto& chain : chains) {
-                    LayoutControllerGrid2D controller(sa_config);
+                    const auto& chain_sa_config = sa_provider ? sa_provider->get(chain.number) : sa_config;
+                    LayoutControllerGrid2D controller(chain_sa_config);
                     int sa_iters = 0;
                     controller.evolve(state, rng, &sa_iters, ctx, &chain.nodes);
                     iter_count += sa_iters;

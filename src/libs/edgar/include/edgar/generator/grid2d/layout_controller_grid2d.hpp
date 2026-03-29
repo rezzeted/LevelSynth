@@ -648,10 +648,23 @@ public:
                     if (is_different_enough(snap)) {
                         if (state_for_inner_clone) {
                             Grid2DLayoutState<TRoom> cl = state_for_inner_clone->clone();
+
+                            std::vector<bool> clone_placed(static_cast<std::size_t>(n), true);
+                            for (int idx = 0; idx < n; ++idx) {
+                                const TRoom rid2 = rmap.index_to_room[static_cast<std::size_t>(idx)];
+                                const auto& rd2 = level.get_room_description(rid2);
+                                if (rd2.is_corridor() && rd2.stage() == 2) {
+                                    clone_placed[static_cast<std::size_t>(idx)] = false;
+                                }
+                            }
+                            const bool corridors_ok = try_insert_corridors(
+                                *cl.level, cl.rmap, cl.ig, cl.outlines, cl.positions,
+                                cl.templates, cl.transforms, clone_placed, rng);
+
                             int tcc_iters = 0;
                             const int tcc_pass = std::min(64, std::max(8, n));
-                            const bool tcc_ok =
-                                try_complete_chain(cl, rng, tcc_pass, &tcc_iters);
+                            const bool tcc_ok = corridors_ok && try_complete_chain(
+                                cl, rng, tcc_pass, &tcc_iters);
                             inner_tcc_iters_sum += tcc_iters;
                             if (ctx && ctx->stats_out) {
                                 ctx->stats_out->iterations_since_last_event += tcc_iters;

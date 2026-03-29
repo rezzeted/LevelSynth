@@ -53,6 +53,7 @@ For the full story of what is ported from Edgar-DotNet, see [EDGAR_PORT_INVENTOR
   - `backend = chain_simulated_annealing` — chain decomposition + SA.
   - `chain_decomposition` — `breadth_first_old` (default), `breadth_first_new`, or `two_stage`.
   - `layout_stream_mode` — `Single`, `OnEachLayoutGenerated`, or `OnEachSaTryCompleteChain`; `max_layout_yields`.
+  - `sa_config_provider` — `std::optional<common::SAConfigurationProvider>`, per-chain or fixed SA configuration.
 - `edgar::generator::grid2d::Grid2DLayoutState<TRoom>` — mutable layout state (`clone`, `to_layout_grid()`).
 - `edgar::generator::grid2d::LayoutGrid2D<TRoom>` — final output: vector of LayoutRoomGrid2D.
 - `edgar::generator::grid2d::LayoutRoomGrid2D<TRoom>` — room, outline, position, is_corridor, room_template, room_description, transformation.
@@ -65,13 +66,17 @@ For the full story of what is ported from Edgar-DotNet, see [EDGAR_PORT_INVENTOR
 - `edgar::generator::grid2d::SimulatedAnnealingEvolverGrid2D` — legacy random-walk SA (cycles x trials, Metropolis).
 - `edgar::generator::grid2d::ChainBasedGeneratorGrid2D<TRoom>` — chain decomposition + initial placement + SA polish. Static `generate()`.
 - `edgar::generator::grid2d::LayoutControllerGrid2D` — greedy door-aware placement, SA evolve, corridor polish, try_complete_chain.
+  - `add_node_greedily()` — static: exhaustive search over template×transform×position to find minimum-energy placement for a single room.
+  - `add_chain_greedy()` — static: sequentially calls add_node_greedily for each node in a chain.
+  - `try_insert_corridors()` — static: greedy corridor insertion for rooms not yet placed (exists but not yet integrated into pipeline).
 - `edgar::generator::grid2d::detail::RoomIndexMap<TRoom>` — bidirectional TRoom <-> int index mapping + int_graph().
 
 ## Energy / SA configuration
 
-- `edgar::generator::common::EnergyData` — overlap_penalty, corridor_penalty, minimum_distance_penalty (all double).
+- `edgar::generator::common::EnergyData` — overlap_penalty, corridor_penalty, minimum_distance_penalty (all double); `is_valid()` returns `bool` (`overlap_penalty <= 0.0`).
 - `edgar::generator::common::BasicEnergyUpdater` — static `total_penalty()`: sums all EnergyData penalties.
-- `edgar::generator::common::SimulatedAnnealingConfiguration` — cycles (50), trials_per_cycle (100), max_iterations_without_success (100), max_stage_two_failures (10000), handle_trees_greedly (**stub** — not used in logic, API compatibility only), max_perturbation_radius (6, C++ only).
+- `edgar::generator::common::SimulatedAnnealingConfiguration` — cycles (50), trials_per_cycle (100), max_iterations_without_success (100), max_stage_two_failures (10000), handle_trees_greedly (when true, uses `add_chain_greedy` instead of SA for tree chains), max_perturbation_radius (6, C++ only).
+- `edgar::generator::common::SAConfigurationProvider` — per-chain or fixed SA configuration provider. Constructor takes either a single `SimulatedAnnealingConfiguration` (fixed) or `std::vector<SimulatedAnnealingConfiguration>` (per-chain). Method `get(chain_number)` returns the config for a given chain.
 - `edgar::generator::RoomTemplateRepeatMode` — AllowRepeat, NoImmediate, NoRepeat.
 
 ## IO

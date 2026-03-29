@@ -1193,3 +1193,110 @@ TEST(EdgarGolden, DeterministicGeneration_DifferentSeedDifferentOutput) {
     }
     EXPECT_TRUE(any_different) << "Different seeds should produce different layouts";
 }
+
+TEST(EdgarGenerator, SAConfigurationProvider_PerChainConfig) {
+    using namespace edgar::generator;
+    using namespace edgar::generator::grid2d;
+    using namespace edgar::geometry;
+
+    auto square = RoomTemplateGrid2D(PolygonGrid2D::get_square(8),
+                                     std::make_shared<SimpleDoorModeGrid2D>(1, 1));
+    RoomDescriptionGrid2D room_desc(false, {square});
+
+    LevelDescriptionGrid2D<int> level;
+    for (int i = 0; i < 6; ++i) {
+        level.add_room(i, room_desc);
+    }
+    level.add_connection(0, 1);
+    level.add_connection(0, 2);
+    level.add_connection(0, 3);
+    level.add_connection(0, 4);
+    level.add_connection(0, 5);
+    level.add_connection(1, 2);
+
+    common::SimulatedAnnealingConfiguration cfg_a;
+    cfg_a.cycles = 3;
+    cfg_a.trials_per_cycle = 10;
+    cfg_a.handle_trees_greedily = false;
+
+    common::SimulatedAnnealingConfiguration cfg_b;
+    cfg_b.cycles = 5;
+    cfg_b.trials_per_cycle = 20;
+    cfg_b.handle_trees_greedily = false;
+
+    common::SAConfigurationProvider provider({cfg_a, cfg_b, cfg_a, cfg_b, cfg_a, cfg_b, cfg_a, cfg_b, cfg_a, cfg_b});
+
+    std::mt19937 rng(12345);
+    auto result = ChainBasedGeneratorGrid2D<int>::generate(
+        level, cfg_b, rng,
+        ChainDecompositionStrategy::breadth_first_old,
+        {}, nullptr, &provider);
+
+    EXPECT_EQ(result.layout.rooms.size(), 6u);
+    EXPECT_GT(result.iterations, 0);
+}
+
+TEST(EdgarGenerator, SAConfigurationProvider_FixedConfig) {
+    using namespace edgar::generator;
+    using namespace edgar::generator::grid2d;
+    using namespace edgar::geometry;
+
+    auto square = RoomTemplateGrid2D(PolygonGrid2D::get_square(8),
+                                     std::make_shared<SimpleDoorModeGrid2D>(1, 1));
+    RoomDescriptionGrid2D room_desc(false, {square});
+
+    LevelDescriptionGrid2D<int> level;
+    level.add_room(0, room_desc);
+    level.add_room(1, room_desc);
+    level.add_connection(0, 1);
+
+    common::SimulatedAnnealingConfiguration sa_config;
+    sa_config.cycles = 5;
+    sa_config.trials_per_cycle = 20;
+    sa_config.handle_trees_greedily = false;
+
+    common::SAConfigurationProvider provider(sa_config);
+
+    std::mt19937 rng_a(42);
+    auto result_a = ChainBasedGeneratorGrid2D<int>::generate(
+        level, sa_config, rng_a,
+        ChainDecompositionStrategy::breadth_first_old,
+        {}, nullptr, &provider);
+
+    std::mt19937 rng_b(42);
+    auto result_b = ChainBasedGeneratorGrid2D<int>::generate(
+        level, sa_config, rng_b);
+
+    EXPECT_EQ(result_a.iterations, result_b.iterations)
+        << "Fixed provider should produce same iterations as bare config";
+}
+
+TEST(EdgarGenerator, TryInsertCorridors_StageTwoCorridors) {
+    using namespace edgar::generator;
+    using namespace edgar::generator::grid2d;
+    using namespace edgar::geometry;
+
+    auto square = RoomTemplateGrid2D(PolygonGrid2D::get_square(8),
+                                     std::make_shared<SimpleDoorModeGrid2D>(1, 1));
+    auto corridor_tmpl = RoomTemplateGrid2D(PolygonGrid2D::get_rectangle(3, 8),
+                                            std::make_shared<SimpleDoorModeGrid2D>(1, 0));
+
+    RoomDescriptionGrid2D room_desc(false, {square});
+    RoomDescriptionGrid2D corridor_desc(true, {corridor_tmpl}, 2);
+
+    LevelDescriptionGrid2D<int> level;
+    level.add_room(0, room_desc);
+    level.add_room(1, room_desc);
+    level.add_room(2, corridor_desc);
+    level.add_connection(0, 2);
+    level.add_connection(2, 1);
+
+    common::SimulatedAnnealingConfiguration sa_config;
+    sa_config.cycles = 5;
+    sa_config.trials_per_cycle = 20;
+    sa_config.handle_trees_greedily = false;
+
+    std::mt19937 rng(42);
+    auto result = ChainBasedGeneratorGrid2D<int>::generate(level, sa_config, rng);
+    EXPECT_EQ(result.layout.rooms.size(), 3u);
+}
