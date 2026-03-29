@@ -102,6 +102,193 @@ public:
     }
 
     template <typename TRoom>
+    static bool add_node_greedily(const LevelDescriptionGrid2D<TRoom>& level,
+                                  const detail::RoomIndexMap<TRoom>& rmap,
+                                  const graphs::UndirectedAdjacencyListGraph<int>& ig,
+                                  std::vector<geometry::PolygonGrid2D>& outlines,
+                                  std::vector<geometry::Vector2Int>& positions,
+                                  std::vector<std::optional<RoomTemplateGrid2D>>& templates,
+                                  std::vector<geometry::TransformationGrid2D>& transforms,
+                                  std::vector<bool>& placed, int room_index, std::mt19937& rng) {
+        const int n = static_cast<int>(outlines.size());
+        const TRoom rid = rmap.index_to_room[static_cast<std::size_t>(room_index)];
+        const auto& rd = level.get_room_description(rid);
+        const auto& tmpls = rd.room_templates();
+
+        std::vector<bool> is_corridor(static_cast<std::size_t>(n));
+        for (int i = 0; i < n; ++i) {
+            is_corridor[static_cast<std::size_t>(i)] =
+                level.get_room_description(rmap.index_to_room[static_cast<std::size_t>(i)]).is_corridor();
+        }
+
+        std::vector<int> placed_neighbours;
+        for (int nb : ig.neighbours(room_index)) {
+            if (placed[static_cast<std::size_t>(nb)]) {
+                placed_neighbours.push_back(nb);
+            }
+        }
+
+        double best_energy = std::numeric_limits<double>::max();
+        geometry::PolygonGrid2D best_outline = geometry::PolygonGrid2D::get_rectangle(1, 1);
+        geometry::Vector2Int best_position = positions[static_cast<std::size_t>(room_index)];
+        RoomTemplateGrid2D best_template = tmpls.front();
+        geometry::TransformationGrid2D best_transform = geometry::TransformationGrid2D::Identity;
+        bool found = false;
+
+
+        for (const auto& tmpl : tmpls) {
+            const auto& trs = tmpl.allowed_transformations();
+            std::vector<geometry::TransformationGrid2D> transforms_to_try;
+            if (trs.empty()) {
+                transforms_to_try.push_back(geometry::TransformationGrid2D::Identity);
+            } else {
+                transforms_to_try = trs;
+            }
+
+            for (const auto& tr : transforms_to_try) {
+                geometry::PolygonGrid2D outline = tmpl.outline().transform(tr);
+                auto doors = tmpl.doors().get_doors(outline);
+
+                if (!placed_neighbours.empty() && !doors.empty()) {
+                    std::vector<std::vector<DoorLineGrid2D>> doors_tab(static_cast<std::size_t>(n));
+                    for (int j = 0; j < n; ++j) {
+                        if (j == room_index) {
+                            doors_tab[static_cast<std::size_t>(j)] = doors;
+                            continue;
+                        }
+                        if (placed[static_cast<std::size_t>(j)] && templates[static_cast<std::size_t>(j)].has_value()) {
+                            doors_tab[static_cast<std::size_t>(j)] =
+                                templates[static_cast<std::size_t>(j)]->doors().get_doors(outlines[static_cast<std::size_t>(j)]);
+                        }
+                    }
+
+                    std::vector<geometry::Vector2Int> candidates;
+                    for (int nb : placed_neighbours) {
+                        if (doors_tab[static_cast<std::size_t>(nb)].empty()) continue;
+                        auto space = ConfigurationSpacesGrid2D::configuration_space_between(
+                            outline, doors, outlines[static_cast<std::size_t>(nb)],
+                            doors_tab[static_cast<std::size_t>(nb)]);
+                        auto offsets = enumerate_configuration_space_offsets(space);
+                        for (auto& off : offsets) {
+                            candidates.push_back(off + positions[static_cast<std::size_t>(nb)]);
+                        }
+                    }
+
+                    for (const auto& cand_pos : candidates) {
+                        bool overlap = false;
+                        for (int j = 0; j < n; ++j) {
+                            if (j == room_index || !placed[static_cast<std::size_t>(j)]) continue;
+                            if (geometry::polygons_overlap_area(outlines[static_cast<std::size_t>(j)],
+                                                                positions[static_cast<std::size_t>(j)],
+                                                                outline, cand_pos)) {
+                                overlap = true;
+                                break;
+                            }
+                        }
+                        if (overlap) continue;
+
+                        outlines[static_cast<std::size_t>(room_index)] = outline;
+                        positions[static_cast<std::size_t>(room_index)] = cand_pos;
+                        auto energy_data = ConstraintsEvaluatorGrid2D::incident_to_room(
+                            static_cast<std::size_t>(room_index), outlines, positions,
+                            level.minimum_room_distance, &is_corridor);
+                        double penalty = common::BasicEnergyUpdater::total_penalty(energy_data);
+
+                        if (penalty < best_energy) {
+                            best_energy = penalty;
+                            best_outline = outline;
+                            best_position = cand_pos;
+                            best_template = tmpl;
+                            best_transform = tr;
+                            found = true;
+                        }
+                    }
+                } else {
+                    geometry::Vector2Int cand_pos = positions[static_cast<std::size_t>(room_index)];
+                    bool overlap = false;
+                    for (int j = 0; j < n; ++j) {
+                        if (j == room_index || !placed[static_cast<std::size_t>(j)]) continue;
+                        if (geometry::polygons_overlap_area(outlines[static_cast<std::size_t>(j)],
+                                                            positions[static_cast<std::size_t>(j)],
+                                                            outline, cand_pos)) {
+                            overlap = true;
+                            break;
+                        }
+                    }
+                    if (!overlap) {
+                        outlines[static_cast<std::size_t>(room_index)] = outline;
+                        auto energy_data = ConstraintsEvaluatorGrid2D::incident_to_room(
+                            static_cast<std::size_t>(room_index), outlines, positions,
+                            level.minimum_room_distance, &is_corridor);
+                        double penalty = common::BasicEnergyUpdater::total_penalty(energy_data);
+
+                        if (penalty < best_energy) {
+                            best_energy = penalty;
+                            best_outline = outline;
+                            best_position = cand_pos;
+                            best_template = tmpl;
+                            best_transform = tr;
+                            found = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        if (found) {
+            outlines[static_cast<std::size_t>(room_index)] = std::move(best_outline);
+            positions[static_cast<std::size_t>(room_index)] = best_position;
+            templates[static_cast<std::size_t>(room_index)] = std::move(best_template);
+            transforms[static_cast<std::size_t>(room_index)] = best_transform;
+            placed[static_cast<std::size_t>(room_index)] = true;
+        }
+        return found;
+    }
+
+    template <typename TRoom>
+    static bool add_chain_greedy(const LevelDescriptionGrid2D<TRoom>& level,
+                                 const detail::RoomIndexMap<TRoom>& rmap,
+                                 const graphs::UndirectedAdjacencyListGraph<int>& ig,
+                                 std::vector<geometry::PolygonGrid2D>& outlines,
+                                 std::vector<geometry::Vector2Int>& positions,
+                                 std::vector<std::optional<RoomTemplateGrid2D>>& templates,
+                                 std::vector<geometry::TransformationGrid2D>& transforms,
+                                 std::vector<bool>& placed, const std::vector<int>& chain_nodes, std::mt19937& rng) {
+        for (int room_index : chain_nodes) {
+            if (placed[static_cast<std::size_t>(room_index)]) continue;
+            if (!add_node_greedily(level, rmap, ig, outlines, positions, templates, transforms,
+                                   placed, room_index, rng)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    template <typename TRoom>
+    static bool try_insert_corridors(const LevelDescriptionGrid2D<TRoom>& level,
+                                     const detail::RoomIndexMap<TRoom>& rmap,
+                                     const graphs::UndirectedAdjacencyListGraph<int>& ig,
+                                     std::vector<geometry::PolygonGrid2D>& outlines,
+                                     std::vector<geometry::Vector2Int>& positions,
+                                     std::vector<std::optional<RoomTemplateGrid2D>>& templates,
+                                     std::vector<geometry::TransformationGrid2D>& transforms,
+                                     std::vector<bool>& placed, std::mt19937& rng) {
+        const int n = static_cast<int>(outlines.size());
+        for (int i = 0; i < n; ++i) {
+            const TRoom rid = rmap.index_to_room[static_cast<std::size_t>(i)];
+            const auto& rd = level.get_room_description(rid);
+            if (!rd.is_corridor() || rd.stage() != 2) continue;
+            if (placed[static_cast<std::size_t>(i)]) continue;
+
+            if (!add_node_greedily(level, rmap, ig, outlines, positions, templates, transforms,
+                                            placed, i, rng)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    template <typename TRoom>
     static bool try_complete_chain(const LevelDescriptionGrid2D<TRoom>& level,
                                    const detail::RoomIndexMap<TRoom>& rmap,
                                    const graphs::UndirectedAdjacencyListGraph<int>& ig,
@@ -118,11 +305,11 @@ public:
             is_corridor[static_cast<std::size_t>(i)] =
                 level.get_room_description(rmap.index_to_room[static_cast<std::size_t>(i)]).is_corridor();
         }
-        auto total_penalty = [&]() {
-            return common::BasicEnergyUpdater::total_penalty(ConstraintsEvaluatorGrid2D::evaluate(
-                outlines, positions, level.minimum_room_distance, &is_corridor));
+        auto eval_full = [&]() {
+            return ConstraintsEvaluatorGrid2D::evaluate(
+                outlines, positions, level.minimum_room_distance, &is_corridor);
         };
-        if (total_penalty() <= 0.0) {
+        if (eval_full().is_valid()) {
             return true;
         }
         std::vector<bool> placed(static_cast<std::size_t>(n), true);
@@ -149,7 +336,7 @@ public:
                 }
                 ++sweep_steps;
             }
-            if (total_penalty() <= 0.0) {
+            if (eval_full().is_valid()) {
                 if (iterations_out) {
                     *iterations_out += sweep_steps;
                 }
@@ -164,7 +351,7 @@ public:
         if (iterations_out) {
             *iterations_out += sweep_steps;
         }
-        return total_penalty() <= 0.0;
+        return eval_full().is_valid();
     }
 
     template <typename TRoom>
@@ -174,7 +361,8 @@ public:
                 std::vector<std::optional<RoomTemplateGrid2D>>& templates,
                 std::vector<geometry::TransformationGrid2D>& transforms, std::mt19937& rng, int* iterations_out,
                 const ChainGenerateContext<TRoom>* ctx = nullptr,
-                Grid2DLayoutState<TRoom>* state_for_inner_clone = nullptr) {
+                Grid2DLayoutState<TRoom>* state_for_inner_clone = nullptr,
+                const std::vector<int>* chain_nodes = nullptr) {
         const int n = static_cast<int>(outlines.size());
         if (n <= 0) {
             if (iterations_out) {
@@ -225,7 +413,15 @@ public:
         int accepted_solutions = 1;
         double t = t0;
 
-        std::uniform_int_distribution<int> pick_room(0, n - 1);
+        std::vector<int> perturbable;
+        if (chain_nodes && !chain_nodes->empty()) {
+            perturbable = *chain_nodes;
+            std::sort(perturbable.begin(), perturbable.end());
+        } else {
+            perturbable.resize(static_cast<std::size_t>(n));
+            for (int k = 0; k < n; ++k) perturbable[static_cast<std::size_t>(k)] = k;
+        }
+        std::uniform_int_distribution<int> pick_perturbable(0, static_cast<int>(perturbable.size()) - 1);
         std::uniform_int_distribution<int> pick_dx(-config_.max_perturbation_radius,
                                                      config_.max_perturbation_radius);
         std::uniform_int_distribution<int> pick_dy(-config_.max_perturbation_radius,
@@ -361,7 +557,7 @@ public:
                 }
 
                 ++iterations;
-                const int r = pick_room(rng);
+                const int r = perturbable[static_cast<std::size_t>(pick_perturbable(rng))];
                 const geometry::Vector2Int old_pos = positions[static_cast<std::size_t>(r)];
                 const geometry::PolygonGrid2D old_outline = outlines[static_cast<std::size_t>(r)];
                 const std::optional<RoomTemplateGrid2D> old_tmpl = templates[static_cast<std::size_t>(r)];
@@ -552,9 +748,10 @@ public:
 
     template <typename TRoom>
     void evolve(Grid2DLayoutState<TRoom>& state, std::mt19937& rng, int* iterations_out,
-                 const ChainGenerateContext<TRoom>* ctx = nullptr) {
+                 const ChainGenerateContext<TRoom>* ctx = nullptr,
+                 const std::vector<int>* chain_nodes = nullptr) {
         evolve(*state.level, state.rmap, state.ig, state.outlines, state.positions, state.templates, state.transforms,
-               rng, iterations_out, ctx, &state);
+               rng, iterations_out, ctx, &state, chain_nodes);
     }
 
 private:
