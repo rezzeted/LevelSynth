@@ -12,7 +12,13 @@ For the full story of what is ported from Edgar-DotNet, see [EDGAR_PORT_INVENTOR
 - `edgar::geometry::TransformationGrid2D` — enum: Identity, Rotate90/180/270, MirrorX/Y, Diagonal13/24.
 - `edgar::geometry::OrthogonalLineIntersection` — static: `try_get_intersection`, `get_intersections`, `remove_intersections`, `partition_by_intersection`.
 - `edgar::geometry::polygons_overlap_area` — interior overlap test via Clipper2.
-- `edgar::geometry::polygon_to_path64_world` — convert PolygonGrid2D to Clipper2 Path64.
+- `edgar::geometry::overlap_area(p1, pos1, p2, pos2) → double` — exact overlap area via Clipper2.
+- `edgar::geometry::polygons_touch(p1, pos1, p2, pos2) → bool` — boundary touching test.
+- `edgar::geometry::polygons_have_minimum_distance(p1, pos1, p2, pos2, dist) → bool` — minimum distance test
+- `edgar::geometry::normalize_polygon(polygon) → polygon` — reorder vertices so smallest point is first
+- `edgar::graphs::is_bipartite<T>(graph) → bool` — bipartiteness check via BFS coloring
+- `edgar::graphs::is_planar<T>(graph) → bool` — planarity check via Boost `boyer_myrvold`
+- `edgar::graphs::get_cycles<T>(graph) → vector<vector<T>>` — cycle detection via planar faces- `edgar::geometry::polygon_to_path64_world` — convert PolygonGrid2D to Clipper2 Path64.
 - `edgar::geometry::overlap_along_line`, `remove_overlapping_along_lines` — overlap along an orthogonal segment (merged rectangle intervals on scan line; Clipper2 fallback).
 - `edgar::geometry::detail::overlap_along_line_polygon_partition_bruteforce` — brute-force reference for tests.
 - `edgar::geometry::partition_orthogonal_polygon_to_rectangles` — orthogonal polygon decomposition into axis-aligned rectangles.
@@ -26,7 +32,10 @@ For the full story of what is ported from Edgar-DotNet, see [EDGAR_PORT_INVENTOR
 - `edgar::graphs::UndirectedAdjacencyListGraph<T>` — adjacency list graph (add_vertex, add_edge, neighbours, has_edge, vertices).
 - `edgar::graphs::is_connected<T>` — BFS connectivity check.
 - `edgar::graphs::is_tree<T>` — connected + |E| = |V|-1.
-- `edgar::graphs::get_planar_faces` — planar face traversal via Boost.Graph (boyer_myrvold_planarity_test + planar_face_traversal; int vertices only).
+- `edgar::graphs::is_planar<T>` — planarity check via Boost boyer_myrvold.
+- `edgar::graphs::is_bipartite<T>` — bipartiteness via BFS coloring.
+- `edgar::graphs::get_cycles<T>` — cycle detection via planar faces
+- `edgar::graphs::get_planar_faces` — planar face traversal via Boost.Graph (int vertices only).
 
 ## Chain decomposition
 
@@ -66,9 +75,9 @@ For the full story of what is ported from Edgar-DotNet, see [EDGAR_PORT_INVENTOR
 - `edgar::generator::grid2d::SimulatedAnnealingEvolverGrid2D` — legacy random-walk SA (cycles x trials, Metropolis).
 - `edgar::generator::grid2d::ChainBasedGeneratorGrid2D<TRoom>` — chain decomposition + initial placement + SA polish. Static `generate()`.
 - `edgar::generator::grid2d::LayoutControllerGrid2D` — greedy door-aware placement, SA evolve, corridor polish, try_complete_chain.
-  - `add_node_greedily()` — static: exhaustive search over template×transform×position to find minimum-energy placement for a single room.
-  - `add_chain_greedy()` — static: sequentially calls add_node_greedily for each node in a chain.
-  - `try_insert_corridors()` — static: greedy corridor insertion for rooms not yet placed (exists but not yet integrated into pipeline).
+   - `add_node_greedily()` — static: exhaustive search over template×transform×position to find minimum-energy placement for a single room.
+   - `add_chain_greedy()` — static: sequentially calls add_node_greedily for each node in a chain.
+   - `try_insert_corridors()` — static: greedy corridor insertion ( integrated into SA pipeline — called on clone before `try_complete_chain`).
 - `edgar::generator::grid2d::detail::RoomIndexMap<TRoom>` — bidirectional TRoom <-> int index mapping + int_graph().
 
 ## Energy / SA configuration

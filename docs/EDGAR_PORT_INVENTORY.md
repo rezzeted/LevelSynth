@@ -18,7 +18,14 @@ Reference clone: `_edgar_ref/` (gitignored) — [OndrejNepozitek/Edgar-DotNet](h
 
 **Где мы сейчас:** в репозитории LevelSynth есть **рабочая** статическая библиотека `edgar` (C++20), публичный API Grid2D, **два режима генератора** (`GraphBasedGeneratorBackend`): **strip packing** и **chain + SA** (`ChainBasedGeneratorGrid2D`). Выбор стратегии цепей: `breadth_first_old` (по умолчанию), `breadth_first_new` (`BreadthFirstChainDecomposition`), `two_stage` (`TwoStageChainDecomposition` со стадиями комнат). **Configuration spaces:** `ConfigurationSpacesGenerator` (в т.ч. коридоры `get_configuration_space_over_corridor*`), `OrthogonalLineIntersection::remove_intersections`, `overlap_along_line` + `remove_overlapping_alongs_lines`. **Декомпозиция полигона:** полный порт C# `GridPolygonPartitioning` (диагонали, König / max independent set, Kuhn matching, `split_convave`) в [`grid_polygon_partitioning.cpp`](../src/libs/edgar/src/geometry/grid_polygon_partitioning.cpp); NuGet **RangeTree** заменён линейным перебором отрезков (достаточно для размеров шаблонов комнат). **Overlap вдоль линии:** `polygon_overlap_grid2d` + запасной `polygons_overlap_area` при пустой декомпозиции. **Constraints:** `EnergyData` (+ `is_valid()`) + `ConstraintsEvaluatorGrid2D`. **SA:** `SimulatedAnnealingConfiguration` с полями как в C# (`cycles`, `trials_per_cycle`, `max_iterations_without_success`, `max_stage_two_failures`, `handle_trees_greedily`) плюс `max_perturbation_radius` для Grid2D; `SAConfigurationProvider` — поддержка фиксированной и per-chain конфигурации SA (опционально через `GraphBasedGeneratorConfiguration::sa_config_provider`, пока не интегрировано в pipeline); `SimulatedAnnealingEvolverGrid2D` — циклы × trials, расписание `t0`/`t1`/`ratio`, Metropolis по `deltaEAvg` (без `ILayout`). **`LayoutControllerGrid2D`** — жадность через `sample_maximum_intersection_position` (в т.ч. `get_configuration_space_over_corridor` для коридора vs не-коридор), `add_node_greedily` (исчерпывающий перебор template×transform×position → min energy), `add_chain_greedy` (определена, не в pipeline), `try_insert_corridors` (определена, не в pipeline), инкрементальная энергия по `incident_to_room`, SA **shape** (~40%) / **position** (~60%), откат контура при reject; `polish_corridor_positions`, `try_complete_chain` (жадные проходы до нулевой энергии или лимита); **`evolve_random_walk`** — legacy. **`Grid2DLayoutState<TRoom>`** — единый mutable state (аналог C# `ILayout` / `Smart...`), `clone()` / `to_layout_grid()`. **Pipeline:** per-chain SA loop (каждая цепь обрабатывается отдельно), chain-scoped perturbation (только комнаты текущей цепи), линейная итерация по цепям (нет DFS-планировщика как в C#). **`handle_trees_greedily`:** реализовано — при `true` + `is_tree(graph)` используется `add_node_greedily` вместо SA.
 
-**Остаётся для полного паритета с C# (L3 / идеал):** идентичный порядок веток `SimulatedAnnealingEvolver` (perturb → valid → `IsDifferentEnough` → `TryCompleteChain` → Metropolis, встроенные random restarts), `add_chain_greedy` / `try_insert_corridors` в pipeline, кросс-языковый golden с общим RNG; опционально **Hopcroft–Karp** вместо Kuhn при больших графах диагоналей в `GridPolygonPartitioning`.
+**Остаётся для полного паритета с C# (L3 / этапы A–E):**
+
+1. **Недостающие алгоритмы** (этап A): `is_bipartite`, `is_planar`, `get_cycles`, `overlap_area` → double, `polygons_touch`, `polygons_have_minimum_distance`, `normalize_polygon`.
+2. **Тесты** (этапы B–C): OrthogonalLine, Polygon, HopcroftKarp, OverlapAlongLine, интеграционные тесты генератора, RoomShapes handler, stress tests.
+3. **Cancellation** (этап D): `std::atomic<bool>* cancel_token` в `ChainGenerateContext`, проверка в SA loop.
+4. **Валидация** (этап E): 100 генераций каждого preset'а → 0% overlap, benchmark C++ vs C#.
+
+**Пропускается (не используется в LevelSynth):** ManualDoorModeGrid2D, EntropyCalculator, CycleClustersAnalyzer, SimpleBitVector32.
 
 ---
 
@@ -35,9 +42,9 @@ Reference clone: `_edgar_ref/` (gitignored) — [OndrejNepozitek/Edgar-DotNet](h
 | `GridPolygonPartitioning` | Сделано | Порт с Edgar-DotNet + `bipartite_matching` (König / MIS); тесты L/Plus/Another/Complex + bipartite basics |
 | Слой Graphs | **Завершено (Grid2D L1)** | `UndirectedAdjacencyListGraph<T>`; `is_connected`, `is_tree`, `get_planar_faces` (Boost.Graph `boyer_myrvold_planarity_test` + face traversal) — достаточно для текущего pipeline |
 | Grid2D API | **Завершено (Grid2D L1)** | `LevelDescriptionGrid2D`, `RoomDescriptionGrid2D` (is_corridor, stage), `RoomTemplateGrid2D` (outline + IDoorMode + repeat mode + allowed transforms), `SimpleDoorModeGrid2D::get_doors`, `GraphBasedGeneratorGrid2D` (strip + chain backends), `LayoutGrid2D` / `LayoutRoomGrid2D`, `Grid2DLayoutState`, `LayoutOrchestrationStats`, `ChainGenerateContext`, yield/stream modes |
-| Генератор | **Завершено (Grid2D L1)** | strip / chain + SA + corridor CS + `try_complete_chain` + restarts + `Grid2DLayoutState` + yield/stats API; цепи: `breadth_first_old` / `breadth_first_new` / `two_stage`; `handle_trees_greedily` реализовано через `add_node_greedily`; per-chain SA loop |
+| Генератор | **Завершено (Grid2D L2)** | strip / chain + SA + corridor CS + `try_complete_chain` + restarts + `Grid2DLayoutState` + yield/stats API; цепи: `breadth_first_old` / `breadth_first_new` / `two_stage`; `handle_trees_greedily` реализовано через `add_node_greedily`; per-chain SA loop; `try_insert_corridors` интегрирован в SA pipeline; `SAConfigurationProvider` интегрирован |
 | Экспорт JSON / PNG | Сделано | `layout_json.hpp`, `dungeon_drawer` + `write_png_rgba` |
-| Тесты | **109 тестов, все проходят** | edgar_tests.cpp: **39** тестов (chains, CS, energy, strip-backend, IO, SA, golden, doors, deterministic, tree greedy vs SA и др.); edgar_parity_tests.cpp: **70** тестов (geometry, overlap, graphs, line intersection, level description, doors, utilities, config spaces); прогон: `ctest -C Release` из `_build` |
+| Тесты | **112 тестов, все проходят** | edgar_tests.cpp: **42** теста (chains, CS, energy, strip-backend, IO, SA, golden, doors, deterministic, tree greedy vs SA, SAConfigProvider, try_insert_corridors и др.); edgar_parity_tests.cpp: **70** тестов (geometry, overlap, graphs, line intersection, level description, doors, utilities, config spaces); прогон: `ctest -C Debug` из `_build` |
 | Интеграция в LevelSynth | Сделано | `main` линкует `edgar`, окно генерации в ImGui |
 | Clipper2 в геометрии | Сделано | `overlap.cpp`, `clipper2_util`; Clipper2 **2.0.1** из upstream (как у порта vcpkg), сборка в дереве edgar |
 
@@ -47,7 +54,11 @@ Reference clone: `_edgar_ref/` (gitignored) — [OndrejNepozitek/Edgar-DotNet](h
 
 Приоритеты условные — от «закрыть план по стеку» до «паритет с C#».
 
-1. **`LayoutController` / orchestration как в C#** — **Grid2D (L2-часть):** `Grid2DLayoutState`, `ChainGenerateContext`, `LayoutStreamMode::OnEachLayoutGenerated` (успех после внешнего `try_complete_chain`) и **`OnEachSaTryCompleteChain`** (после **принятого** SA-шага — `TryCompleteChain` на клоне, как внутренний yield/stage-two в C#; порядок отличается от построчного C#). **`add_chain_greedy` / `try_insert_corridors`** определены, но не интегрированы в pipeline. **`SAConfigurationProvider`** создан, но не подключён к pipeline генерации. **Остаточный gap (L3):** не-Grid2D, полный порядок `PerturbLayout`/`IsDifferentEnough`/random restarts как в C#, кросс-языковый golden.
+1. **Алгоритмы (этап A):** `is_bipartite`, `is_planar`, `get_cycles` — не портированы из C#. `overlap_area → double`, `polygons_touch`, `polygons_have_minimum_distance` — не портированы. `normalize_polygon` — не портирован.
+2. **Тесты (этапы B–C):** 112 тестов vs 146 в C# — не хватает ~34 тестов в областях: OverlapAlongLine (8), OrthogonalLine (6), graph algorithms (10), HopcroftKarp (3), Config Spaces (8), integration (10).
+3. **Cancellation (этап D):** Нет `std::atomic<bool>* cancel_token` в `ChainGenerateContext`.
+4. **EarlyStopping (этап C):** Нет `early_stop_iterations` / `early_stop_time_ms` в конфигурации.
+5. **`LayoutController` / orchestration** — **Grid2D (L2, завершено):** `Grid2DLayoutState`, `ChainGenerateContext`, `LayoutStreamMode`, `OnEachSaTryCompleteChain` (TCC на клоне). **`add_chain_greedy`** и **`try_insert_corridors`** интегрированы в pipeline. **`SAConfigurationProvider`** интегрирован в pipeline. **Остаточный gap (L3):** не-Grid2D, полный порядок `PerturbLayout`/`IsDifferentEnough`/random restarts как в C#, кросс-языковый golden.
 2. **OverlapAlongLine** — **сделано для оси:** при непустой декомпозиции на прямоугольники события по линии считаются через **объединение интервалов** на сканирующей оси (без проверки каждой клетки внутри постоянного участка); при пустой декомпозиции — прежний brute + Clipper2, см. `edgar::geometry::detail::overlap_along_line_polygon_partition_bruteforce` для регрессий.
 3. **Тесты** — расширены регрессиями C++; **опционально для CI:** отдельный репозиторий/скрипт, который гоняет Edgar-DotNet, экспортирует JSON layout и сравнивает с `edgar::io::layout_to_json` (нужен согласованный вход уровня и RNG — пока не автоматизировано).
 4. **stb_image** — **сделано** для импорта: `edgar::io::load_image_rgba`; экспорт по-прежнему `stb_image_write`.
@@ -89,7 +100,7 @@ Reference clone: `_edgar_ref/` (gitignored) — [OndrejNepozitek/Edgar-DotNet](h
 ## C++ library (`src/libs/edgar`)
 
 - Public types mirror `Edgar.Geometry` and `Edgar.GraphBasedGenerator.Grid2D` where feasible.
-- **Generator:** `strip_packing` — детерминированный packer. `chain_simulated_annealing` — цепи + жадность (в т.ч. corridor CS) + jitter + `polish_corridor_positions` + per-chain SA `evolve` + `try_complete_chain` + restarts по `max_stage_two_failures` (cap 128). При `handle_trees_greedily && is_tree(graph)` — `add_node_greedily` вместо SA. Опционально: `layout_stream_mode` / callback / `LayoutOrchestrationStats` (см. `layout_orchestration.hpp`). `add_chain_greedy` и `try_insert_corridors` определены, но не в pipeline. `SAConfigurationProvider` создан, но не подключён к генерации.
+- **Generator:** `strip_packing` — детерминированный packer. `chain_simulated_annealing` — цепи + жадность (в т.ч. corridor CS) + jitter + `polish_corridor_positions` + per-chain SA `evolve` + `try_complete_chain` + restarts по `max_stage_two_failures` (cap 128). При `handle_trees_greedily && is_tree(graph)` — `add_node_greedily` вместо SA. `try_insert_corridors` интегрирован в SA pipeline (вызывается на клоне внутри `evolve()`). `SAConfigurationProvider` интегрирован в `ChainBasedGeneratorGrid2D::generate()`. Опционально: `layout_stream_mode` / callback / `LayoutOrchestrationStats` (см. `layout_orchestration.hpp`).
 
 ## SimulatedAnnealingConfiguration (C# ↔ C++)
 
@@ -124,12 +135,12 @@ Reference clone: `_edgar_ref/` (gitignored) — [OndrejNepozitek/Edgar-DotNet](h
 1. Chain decomposition → линейный порядок комнат.
 2. **Начальное размещение:** greedy через configuration spaces + jitter fallback (не-SA путь).
 3. `polish_corridor_positions` — корректировка позиций коридоров.
-4. **Per-chain SA loop:** для каждой цепи — `LayoutControllerGrid2D::evolve` (cycles × trials, chain-scoped perturbation, shape/position mutations, Metropolis accept).
-5. `try_complete_chain` — жадные проходы для доводки до нулевой энергии.
+4. **Per-chain SA loop:** для каждой цепи — `LayoutControllerGrid2D::evolve` (cycles × trials, chain-scoped perturbation, shape/position mutations, Metropolis accept). Per-chain конфигурация SA через `SAConfigurationProvider::get(chain.number)`.
+5. Внутри `evolve`: на клоне после принятого шага → `try_insert_corridors` (stage-2 коридоры) → `try_complete_chain` (polishing).
 6. Проверка `penalty <= 0.0` → успех или restart (до `max_layout_restarts`).
 7. **Жадная ветка деревьев:** при `handle_trees_greedily && is_tree(graph)` шаги 2–4 заменяются на `add_node_greedily` для каждого узла (без SA).
 
-Отличия от C#: нет DFS-планировщика (линейная итерация по цепям), нет `IsDifferentEnough` внутри SA-цикла, нет встроенных random restarts внутри одного `evolve`.
+Отличия от C#: нет DFS-планировщика (линейная итерация по цепям), нет встроенных random restarts внутри одного `evolve`.
 
 ## Новые API (C++, без прямого аналога или расширение)
 

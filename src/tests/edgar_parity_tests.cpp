@@ -11,6 +11,7 @@
 #include "edgar/geometry/clipper2_util.hpp"
 #include "edgar/graphs/undirected_graph.hpp"
 #include "edgar/graphs/graph_algorithms.hpp"
+#include "edgar/graphs/planar_faces.hpp"
 #include "edgar/generator/grid2d/level_description_grid2d.hpp"
 #include "edgar/generator/grid2d/room_template_grid2d.hpp"
 #include "edgar/generator/grid2d/simple_door_mode_grid2d.hpp"
@@ -809,4 +810,180 @@ TEST(EdgarConfigSpace, OverCorridors_CombinedHAndV) {
     auto points = collect_cs_points(cs);
     EXPECT_FALSE(points.empty());
     EXPECT_FALSE(points.count(Vector2Int(0, 0)));
+}
+
+// ===== Phase A: Algorithm parity tests =====
+
+TEST(EdgarGraphs, IsBipartite_OddCycles_ReturnsFalse) {
+    using namespace edgar::graphs;
+    UndirectedAdjacencyListGraph<int> g;
+    g.add_vertex(0); g.add_vertex(1); g.add_vertex(2);
+    g.add_edge(0, 1); g.add_edge(1, 2); g.add_edge(2, 0);
+    EXPECT_FALSE(is_bipartite(g));
+}
+
+TEST(EdgarGraphs, IsBipartite_CompleteBipartite_ReturnsTrue) {
+    using namespace edgar::graphs;
+    UndirectedAdjacencyListGraph<int> g;
+    for (int i = 0; i < 7; ++i) g.add_vertex(i);
+    g.add_edge(0, 3); g.add_edge(0, 4); g.add_edge(0, 5); g.add_edge(0, 6);
+    g.add_edge(1, 3); g.add_edge(1, 4); g.add_edge(1, 5); g.add_edge(1, 6);
+    g.add_edge(2, 3); g.add_edge(2, 4); g.add_edge(2, 5); g.add_edge(2, 6);
+    EXPECT_TRUE(is_bipartite(g));
+    std::vector<int> pa, pb;
+    EXPECT_TRUE(is_bipartite(g, pa, pb));
+    EXPECT_EQ(pa.size(), 3u);
+    EXPECT_EQ(pb.size(), 4u);
+}
+
+TEST(EdgarGraphs, IsBipartite_NoEdges_ReturnsTrue) {
+    using namespace edgar::graphs;
+    UndirectedAdjacencyListGraph<int> g;
+    for (int i = 0; i < 5; ++i) g.add_vertex(i);
+    EXPECT_TRUE(is_bipartite(g));
+}
+
+TEST(EdgarGraphs, IsBipartite_NotBipartite_WithOddCycle) {
+    using namespace edgar::graphs;
+    UndirectedAdjacencyListGraph<int> g;
+    for (int i = 0; i < 5; ++i) g.add_vertex(i);
+    g.add_edge(0, 1); g.add_edge(1, 2); g.add_edge(2, 3);
+    g.add_edge(3, 4); g.add_edge(4, 0);
+    EXPECT_FALSE(is_bipartite(g));
+}
+
+TEST(EdgarGraphs, IsBipartite_MoreComponents) {
+    using namespace edgar::graphs;
+    UndirectedAdjacencyListGraph<int> g;
+    for (int i = 0; i < 6; ++i) g.add_vertex(i);
+    g.add_edge(0, 1); g.add_edge(1, 2); g.add_edge(2, 0);
+    EXPECT_FALSE(is_bipartite(g));
+
+    UndirectedAdjacencyListGraph<int> g2;
+    for (int i = 0; i < 6; ++i) g2.add_vertex(i);
+    g2.add_edge(0, 1); g2.add_edge(2, 3); g2.add_edge(4, 5);
+    EXPECT_TRUE(is_bipartite(g2));
+}
+
+TEST(EdgarGraphs, IsPlanar_Empty_ReturnsTrue) {
+    using namespace edgar::graphs;
+    UndirectedAdjacencyListGraph<int> g;
+    EXPECT_TRUE(is_planar(g));
+}
+
+TEST(EdgarGraphs, IsPlanar_C3_ReturnsTrue) {
+    using namespace edgar::graphs;
+    UndirectedAdjacencyListGraph<int> g;
+    g.add_vertex(0); g.add_vertex(1); g.add_vertex(2);
+    g.add_edge(0, 1); g.add_edge(1, 2); g.add_edge(2, 0);
+    EXPECT_TRUE(is_planar(g));
+}
+
+TEST(EdgarGraphs, IsPlanar_K5_NotPlanar) {
+    using namespace edgar::graphs;
+    UndirectedAdjacencyListGraph<int> g;
+    for (int i = 0; i < 5; ++i) g.add_vertex(i);
+    for (int i = 0; i < 5; ++i)
+        for (int j = i + 1; j < 5; ++j)
+            g.add_edge(i, j);
+    EXPECT_FALSE(is_planar(g));
+}
+
+TEST(EdgarGraphs, GetCycles_SingleCycle) {
+    using namespace edgar::graphs;
+    UndirectedAdjacencyListGraph<int> g;
+    g.add_vertex(0); g.add_vertex(1); g.add_vertex(2); g.add_vertex(3);
+    g.add_edge(0, 1); g.add_edge(1, 2); g.add_edge(2, 3); g.add_edge(3, 0);
+    auto cycles = get_cycles(g);
+    EXPECT_GE(cycles.size(), 1u);
+    bool found_4 = false;
+    for (const auto& c : cycles) {
+        if (c.size() == 4u) found_4 = true;
+    }
+    EXPECT_TRUE(found_4);
+}
+
+TEST(EdgarGraphs, GetCycles_TwoCyclesWithSharedEdge) {
+    using namespace edgar::graphs;
+    UndirectedAdjacencyListGraph<int> g;
+    for (int i = 0; i < 4; ++i) g.add_vertex(i);
+    g.add_edge(0, 1); g.add_edge(1, 2); g.add_edge(2, 0);
+    g.add_edge(1, 3); g.add_edge(3, 2);
+    auto cycles = get_cycles(g);
+    EXPECT_GE(cycles.size(), 2u);
+}
+
+TEST(EdgarGraphs, GetCycles_TwoCyclesWithSharedNode) {
+    using namespace edgar::graphs;
+    UndirectedAdjacencyListGraph<int> g;
+    g.add_vertex(0); g.add_vertex(1); g.add_vertex(2);
+    g.add_vertex(3); g.add_vertex(4);
+    g.add_edge(0, 1); g.add_edge(1, 2); g.add_edge(2, 0);
+    g.add_edge(0, 3); g.add_edge(3, 4); g.add_edge(4, 0);
+    auto cycles = get_cycles(g);
+    EXPECT_GE(cycles.size(), 2u);
+}
+
+TEST(EdgarGraphs, GetCycles_MultipleCycles) {
+    using namespace edgar::graphs;
+    UndirectedAdjacencyListGraph<int> g;
+    for (int i = 0; i < 5; ++i) g.add_vertex(i);
+    g.add_edge(0, 1); g.add_edge(1, 2); g.add_edge(2, 3); g.add_edge(3, 4); g.add_edge(4, 0);
+    g.add_edge(0, 2); g.add_edge(0, 3);
+    auto cycles = get_cycles(g);
+    EXPECT_GE(cycles.size(), 3u);
+}
+
+TEST(EdgarGeometry, OverlapArea_NonTouching_ReturnsZero) {
+    using namespace edgar::geometry;
+    auto sq = PolygonGrid2D::get_square(5);
+    EXPECT_DOUBLE_EQ(polygons_overlap_area_exact(sq, Vector2Int(0, 0), sq, Vector2Int(10, 10)), 0.0);
+}
+
+TEST(EdgarGeometry, OverlapArea_TwoSquares) {
+    using namespace edgar::geometry;
+    auto sq = PolygonGrid2D::get_square(5);
+    double area = polygons_overlap_area_exact(sq, Vector2Int(0, 0), sq, Vector2Int(3, 3));
+    EXPECT_DOUBLE_EQ(area, 4.0);
+}
+
+TEST(EdgarGeometry, OverlapArea_TwoRectangles) {
+    using namespace edgar::geometry;
+    auto rect = PolygonGrid2D::get_rectangle(4, 6);
+    double area = polygons_overlap_area_exact(rect, Vector2Int(0, 0), rect, Vector2Int(2, 3));
+    EXPECT_DOUBLE_EQ(area, 6.0);
+}
+
+TEST(EdgarGeometry, OverlapArea_PlusShapeAndSquare) {
+    using namespace edgar::geometry;
+    PolygonGrid2DBuilder b;
+    b.add_point(2, 2); b.add_point(0, 2); b.add_point(0, 4); b.add_point(2, 4);
+    b.add_point(2, 6); b.add_point(4, 6); b.add_point(4, 4); b.add_point(6, 4);
+    b.add_point(6, 2); b.add_point(4, 2); b.add_point(4, 0); b.add_point(2, 0);
+    auto plus = b.build();
+    auto sq = PolygonGrid2D::get_square(4);
+    double area = polygons_overlap_area_exact(plus, Vector2Int(0, 0), sq, Vector2Int(1, 1));
+    EXPECT_DOUBLE_EQ(area, 12.0);
+}
+
+TEST(EdgarGeometry, DoTouch_TwoSquares) {
+    using namespace edgar::geometry;
+    auto sq = PolygonGrid2D::get_square(5);
+    EXPECT_TRUE(polygons_touch(sq, Vector2Int(0, 0), sq, Vector2Int(5, 0)));
+    EXPECT_FALSE(polygons_touch(sq, Vector2Int(0, 0), sq, Vector2Int(5, 5)));
+}
+
+TEST(EdgarGeometry, DoHaveMinimumDistance_TwoSquares) {
+    using namespace edgar::geometry;
+    auto sq = PolygonGrid2D::get_square(5);
+    EXPECT_TRUE(polygons_have_minimum_distance(sq, Vector2Int(0, 0), sq, Vector2Int(10, 10), 5));
+    EXPECT_FALSE(polygons_have_minimum_distance(sq, Vector2Int(0, 0), sq, Vector2Int(7, 7), 5));
+}
+
+TEST(EdgarGeometry, NormalizePolygon_ReordersVertices) {
+    using namespace edgar::geometry;
+    auto sq = PolygonGrid2D::get_square(4);
+    auto norm = normalize_polygon(sq);
+    EXPECT_EQ(norm.points().size(), 4u);
+    EXPECT_EQ(norm.points()[0], Vector2Int(0, 0));
 }

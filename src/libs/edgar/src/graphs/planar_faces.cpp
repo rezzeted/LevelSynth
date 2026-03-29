@@ -41,6 +41,33 @@ struct FaceCollector : public boost::planar_face_traversal_visitor {
 
 } // namespace
 
+bool is_planar(const UndirectedAdjacencyListGraph<int>& g) {
+    if (g.vertex_count() == 0) {
+        return true;
+    }
+    const auto verts = g.vertices();
+    std::map<int, int> label_to_index;
+    for (std::size_t i = 0; i < verts.size(); ++i) {
+        label_to_index.emplace(verts[i], static_cast<int>(i));
+    }
+
+    BoostGraph bg(static_cast<int>(verts.size()));
+    std::set<std::pair<int, int>> seen_edges;
+    for (const int& v : verts) {
+        const int vi = label_to_index.at(v);
+        for (const int& n : g.neighbours(v)) {
+            const int ni = label_to_index.at(n);
+            const int a = std::min(vi, ni);
+            const int b = std::max(vi, ni);
+            if (seen_edges.insert({a, b}).second) {
+                boost::add_edge(static_cast<unsigned>(a), static_cast<unsigned>(b), bg);
+            }
+        }
+    }
+
+    return boost::boyer_myrvold_planarity_test(bg);
+}
+
 std::vector<std::vector<int>> get_planar_faces(const UndirectedAdjacencyListGraph<int>& g) {
     if (g.vertex_count() == 0) {
         return {};
@@ -111,6 +138,70 @@ std::vector<std::vector<int>> get_planar_faces(const UndirectedAdjacencyListGrap
         out.push_back(std::move(distinct));
     }
     return out;
+}
+
+namespace {
+
+struct EdgeHash {
+    std::size_t operator()(const std::pair<int, int>& p) const {
+        return static_cast<std::size_t>(p.first) * 31 + static_cast<std::size_t>(p.second);
+    }
+};
+
+void dfs_cycles(const UndirectedAdjacencyListGraph<int>& g,
+                int v, int parent,
+                std::map<int, int>& depth,
+                std::map<int, int>& low,
+                std::map<int, int>& parent_map,
+                std::vector<std::vector<int>>& cycles,
+                int current_depth) {
+    depth[v] = current_depth;
+    low[v] = current_depth;
+
+    for (const int& n : g.neighbours(v)) {
+        if (!depth.count(n)) {
+            parent_map[n] = v;
+            dfs_cycles(g, n, v, depth, low, parent_map, cycles, current_depth + 1);
+            low[v] = std::min(low[v], low[n]);
+        } else if (n != parent) {
+            low[v] = std::min(low[v], depth[n]);
+            if (depth[n] < depth[v]) {
+                std::vector<int> cycle;
+                cycle.push_back(n);
+                int cur = v;
+                while (cur != n) {
+                    cycle.push_back(cur);
+                    cur = parent_map[cur];
+                }
+                if (cycle.size() >= 3) {
+                    cycles.push_back(std::move(cycle));
+                }
+            }
+        }
+    }
+}
+
+}
+
+std::vector<std::vector<int>> get_cycles(const UndirectedAdjacencyListGraph<int>& g) {
+    if (g.vertex_count() == 0) {
+        return {};
+    }
+
+    std::vector<std::vector<int>> faces;
+    try {
+        faces = get_planar_faces(g);
+    } catch (const std::invalid_argument&) {
+        return {};
+    }
+
+    std::vector<std::vector<int>> cycles;
+    for (const auto& face : faces) {
+        if (face.size() >= 3) {
+            cycles.push_back(face);
+        }
+    }
+    return cycles;
 }
 
 } // namespace edgar::graphs
