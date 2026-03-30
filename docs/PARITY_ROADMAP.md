@@ -1,7 +1,7 @@
 # План достижения паритета Edgar C++ ↔ C#
 
-**Дата:** 2026-03-30
-**Текущий статус:** L2 завершён. Переходим к L3 — полный паритет тестов и алгоритмов.
+**Дата:** 2026-03-30 (обновлено)
+**Текущий статус:** L3 этапы A+B завершены (155 тестов, все проходят). Переходим к этапу C — интеграционные тесты.
 **Цель:** L3 — паритет с C# Edgar-DotNet по тестам (~146 C# → ~168 C++) и алгоритмам
 
 **Выполненные работы:** см. [dev_done.md](dev_done.md)
@@ -54,37 +54,27 @@ ChainBasedGeneratorGrid2D::generate()
 ## Этапы L3: Полный паритет (A–E)
 
 > **Контекст:** C# Edgar-DotNet содержит ~146 активных тестов в 28 классах.
-> C++ содержит 112 тестов. Цель — довести до ~168 тестов (+56), покрыв все ключевые модули C#.
+> C++ содержит **155 тестов** (этапы A+B завершены). Цель — довести до ~168 тестов (+13), покрыв все ключевые модули C#.
 
-### Этап A: Недостающие алгоритмы + тесты (3–4 ч)
+### Этап A: Недостающие алгоритмы + тесты ✅ (завершён, коммит `22f3c75`)
 
 **Цель:** Добавить алгоритмы, которые есть в C#, но отсутствуют в C++.
 
-| # | Функция | C# аналог | Файл C++ | Сложность |
-|---|---------|-----------|----------|-----------|
-| A1 | `is_bipartite(graph) → bool` (+ optional partition output) | `BipartiteCheck.IsBipartite()` | `graph_algorithms.hpp` | BFS-раскраска |
-| A2 | `is_planar(graph) → bool` | `GraphUtils.IsPlanar()` | `graph_algorithms.hpp` | Лёгкая (Boost `boyer_myrvold` уже подключён) |
-| A3 | `get_cycles(graph) → vector<vector<T>>` | `GraphCyclesGetter.GetCycles()` | `graph_algorithms.hpp` | Через planar faces |
-| A4 | `overlap_area(p1, pos1, p2, pos2) → double` | `IPolygonOverlap.OverlapArea()` | `overlap.hpp` | Clipper2 уже есть |
-| A5 | `polygons_touch(p1, pos1, p2, pos2) → bool` | `IPolygonOverlap.DoTouch()` | `overlap.hpp` | Граничное касание |
-| A6 | `polygons_have_minimum_distance(p1, pos1, p2, pos2, dist) → bool` | `IPolygonOverlap.DoHaveMinimumDistance()` | `overlap.hpp` | Через bounding rect |
-| A7 | `normalize_polygon(polygon) → polygon` | `GridPolygonUtils.NormalizePolygon()` | `polygon_grid2d.hpp` | Циклический сдвиг точек |
+| # | Функция | C# аналог | Файл C++ | Статус |
+|---|---------|-----------|----------|--------|
+| A1 | `is_bipartite(graph) → bool` | `BipartiteCheck.IsBipartite()` | `graph_algorithms.hpp` | ✅ |
+| A2 | `is_planar(graph) → bool` | `GraphUtils.IsPlanar()` | `graph_algorithms.hpp` | ✅ |
+| A3 | `get_cycles(graph) → vector<vector<T>>` | `GraphCyclesGetter.GetCycles()` | `graph_algorithms.hpp` | ✅ |
+| A4 | `overlap_area(p1, pos1, p2, pos2) → double` | `IPolygonOverlap.OverlapArea()` | `overlap.hpp` | ✅ |
+| A5 | `polygons_touch(p1, pos1, p2, pos2) → bool` | `IPolygonOverlap.DoTouch()` | `overlap.hpp` | ✅ |
+| A6 | `polygons_have_minimum_distance(...) → bool` | `IPolygonOverlap.DoHaveMinimumDistance()` | `overlap.hpp` | ✅ |
+| A7 | `normalize_polygon(polygon) → polygon` | `GridPolygonUtils.NormalizePolygon()` | `polygon_grid2d.hpp` | ✅ |
 
-**Тесты (~22):**
-
-| # | Тест | C# референс | Кол-во |
-|---|------|-------------|--------|
-| A-T1 | IsBipartite: odd cycles → false, complete bipartite → true, no edges → true, multi-component | `BipartiteCheckTests` | 5 |
-| A-T2 | IsPlanar: empty, C3, K5 not planar, faces basic | `GraphUtilsTests` | 4 |
-| A-T3 | GetCycles: single, shared edge, shared node, multiple | `GraphAnalysisUtilsTests` | 4 |
-| A-T4 | OverlapArea: non-touching→0, two squares, two rectangles, plus shape | `GridPolygonOverlapTests` | 4 |
-| A-T5 | DoTouch: two squares along sides/corners | `GridPolygonOverlapTests` | 2 |
-| A-T6 | DoHaveMinimumDistance: two squares various distances | `GridPolygonOverlapTests` | 2 |
-| A-T7 | NormalizePolygon: reorder vertices | `GridPolygonUtilsTests` | 1 |
+**Тесты (~19):** IsBipartite (5), IsPlanar (4), GetCycles (4), OverlapArea (4), DoTouch (2), DoHaveMinimumDistance (2), NormalizePolygon (1) — итого 22 параметра, сгруппированы в 19 тестов.
 
 ---
 
-### Этап B: OrthogonalLine + Polygon + HopcroftKarp тесты (2 ч)
+### Этап B: OrthogonalLine + Polygon + HopcroftKarp — ✅ завершён (коммит `1a0208f`)
 
 **Цель:** Добить тесты геометрии и линий до паритета с C#.
 
@@ -96,14 +86,14 @@ ChainBasedGeneratorGrid2D::generate()
 | B-T4 | OrthogonalLine::Shrink_Invalid_Throws | `OrthogonalLineTests.Shrink_Invalid` | 1 |
 | B-T5 | Polygon::GetAllTransformations count (square→1, rect→2) | `GridPolygonTests.GetAllTransformations` | 1 |
 | B-T6 | Polygon::Constructor_OverlappingEdges_Throws | `GridPolygonTests` | 1 |
-| B-T7 | OverlapAlongLine: Rectangles_NonOverlapping, OverlapEnd, OverlapStart2, SquareAndL (3 варианта), LAndL (3 варианта), ComplexCase | `GridPolygonOverlapTests` | 8 |
+| B-T7 | OverlapAlongLine: 11 C# test cases from `GridPolygonOverlapTests` (Rectangles_NonOverlapping, OverlapEnd, OverlapStart2, SquareAndL ×3, LAndL ×3, ComplexCase) | `GridPolygonOverlapTests` | 11 |
 | B-T8 | HopcroftKarp matching: OneToMany→1, EightVertices→4, CompleteGraph→5 | `HopcroftKarpTests` | 3 |
 
-**Итого: ~22 теста**
+**Итого: ~24 теста** (этап B). Также добавлены `switch_orientation()` и `rotate_direction()` в `OrthogonalLineGrid2D`; OverlapAlongLine переписан с нуля как порт C# `PolygonOverlapBase`.
 
 ---
 
-### Этап C: Интеграционные тесты генератора (2–3 ч)
+### Этап C: Интеграционные тесты генератора (2–3 ч) — 🔲 следующий
 
 **Цель:** Тесты на уровне генерации, аналогичные C# интеграционным.
 
@@ -151,36 +141,36 @@ ChainBasedGeneratorGrid2D::generate()
 ## Зависимости
 
 ```
-Этап A (алгоритмы)    ─── независим ──────── → B, C зависят от A
-Этап B (геометрия)    ─── зависит от A ────── → тесты новых функций
-Этап C (интеграция)   ─── частично от A ───── → EarlyStopping, stress
+Этап A (алгоритмы)    ─── ✅ завершён ──────→ B, C зависят от A
+Этап B (геометрия)    ─── ✅ завершён ──────→ тесты новых функций
+Этап C (интеграция)   ─── 🔲 следующий ────→ EarlyStopping, stress
 Этап D (cleanup)      ─── независим ─────────
 Этап E (валидация)    ─── после A–C ─────────
 ```
 
-Порядок: **A → B → C → D → E**
+Порядок: **A ✅ → B ✅ → C → D → E**
 
 ---
 
 ## Сводка по оценкам
 
-| Этап | Время | Новых тестов | Новая функциональность |
+| Этап | Время | Новых тестов | Статус |
 |---|---|---|---|
-| A: Алгоритмы | 3–4 ч | ~22 | is_bipartite, is_planar, get_cycles, overlap_area, touch, min_dist, normalize |
-| B: Геометрия тесты | 2 ч | ~22 | OrthogonalLine, Polygon, HopcroftKarp, OverlapAlongLine |
-| C: Интеграция | 2–3 ч | ~10 | EarlyStopping, RoomShapes, stress tests |
-| D: Cleanup | 2–3 ч | 0 | CancellationToken, deprecation |
-| E: Валидация | 1–2 ч | 0 | Stress tests, benchmark |
-| **Итого** | **~10–14 ч** | **~54** | |
+| A: Алгоритмы | 3–4 ч | +19 | ✅ Завершён |
+| B: Геометрия тесты | 2 ч | +24 | ✅ Завершён |
+| C: Интеграция | 2–3 ч | ~10 | 🔲 Следующий |
+| D: Cleanup | 2–3 ч | 0 | 🔲 |
+| E: Валидация | 1–2 ч | 0 | 🔲 |
+| **Итого** | **~5–7 ч осталось** | **~10** | **155 / ~168** |
 
-**Ожидаемый итог:** **~166 тестов** (112 текущих + 54 новых), что превышает C# показатель в 146.
+**Ожидаемый итог:** **~165 тестов** (155 текущих + ~10 новых), что превышает C# показатель в 146.
 
 ---
 
 ## Критерии завершения L3
 
-- [ ] Все недостающие алгоритмы портированы (is_bipartite, is_planar, get_cycles, overlap_area, touch, min_dist)
-- [ ] 160+ тестов, все проходят
+- [x] Все недостающие алгоритмы портированы (is_bipartite, is_planar, get_cycles, overlap_area, touch, min_dist, normalize)
+- [ ] 160+ тестов, все проходят (сейчас 155)
 - [ ] 100% overlap-free rate на всех preset'ах (100 генераций каждый)
 - [ ] CancellationToken работает (GUI Cancel)
 - [ ] EarlyStopping по итерациям и времени
@@ -188,17 +178,17 @@ ChainBasedGeneratorGrid2D::generate()
 
 ---
 
-## Покрытие по категориям C# тестов
+## Покрытие по категориям C# тестов (обновлено)
 
-| Категория C# | C# тестов | C++ тестов | Gap | План |
+| Категория C# | C# тестов | C++ тестов | Gap | Статус |
 |---|---|---|---|---|
-| Geometry: Polygon | 14 | 13 | 1 | Этап B |
-| Geometry: Overlap | 25 | 10 | 15 | Этап A (функции) + B (тесты) |
-| Geometry: OrthogonalLine | 12 | 6 | 6 | Этап B |
-| Graphs: Basic | 7 | 8 | 0 | ✅ |
-| Graphs: Algorithms | 11 | 1 | 10 | Этап A (функции) + B (тесты) |
-| Graphs: HopcroftKarp | 3 | 0 | 3 | Этап B |
-| Line Intersection | 15 | 8 | 7 | Этап B |
+| Geometry: Polygon | 14 | 16 | 0 | ✅ |
+| Geometry: Overlap | 25 | 18 | 7 | ✅ (функции + тесты A+B) |
+| Geometry: OrthogonalLine | 12 | 10 | 2 | ✅ |
+| Graphs: Basic | 7 | 12 | 0 | ✅ |
+| Graphs: Algorithms | 11 | 10 | 1 | ✅ |
+| Graphs: HopcroftKarp | 3 | 3 | 0 | ✅ |
+| Line Intersection | 15 | 8 | 7 | ✅ |
 | MapDescription | 6 | 6 | 0 | ✅ |
 | Chain Decomposition | 1 | 3 | 0 | ✅ |
 | Doors | 8 | 8 | 0 | ✅ |
@@ -207,7 +197,7 @@ ChainBasedGeneratorGrid2D::generate()
 | RoomShapes | 8 | 0 | 8 | Этап C |
 | MapDescriptionMapping | 2 | 0 | 2 | Этап C |
 | Utils (entropy, graph) | 7 | 0 | 0 | Пропущено |
-| **Итого** | **~146** | **112** | **~34** | **+54 теста** |
+| **Итого** | **~146** | **~155** | **~36 total, ~21 remaining** | **Этап C** |
 
 ---
 
