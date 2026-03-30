@@ -46,25 +46,18 @@ struct Grid2DLayoutState {
         return copy;
     }
 
-    LayoutGrid2D<TRoom> to_layout_grid() const {
-        const int n = room_count();
-        LayoutGrid2D<TRoom> layout;
-        layout.rooms.reserve(static_cast<std::size_t>(n));
-        for (int i = 0; i < n; ++i) {
-            const TRoom id = rmap.index_to_room[static_cast<std::size_t>(i)];
-            const auto& rd = level->get_room_description(id);
-            layout.rooms.push_back(LayoutRoomGrid2D<TRoom>{
-                .room = id,
-                .outline = outlines[static_cast<std::size_t>(i)],
-                .position = positions[static_cast<std::size_t>(i)],
-                .is_corridor = rd.is_corridor(),
-                .room_template = *templates[static_cast<std::size_t>(i)],
-                .room_description = rd,
-                .transformation = transforms[static_cast<std::size_t>(i)],
-            });
-        }
-        return layout;
-    }
+    LayoutGrid2D<TRoom> to_layout_grid() const;
 };
+
+} // namespace edgar::generator::grid2d
+
+#include "edgar/generator/grid2d/basic_layout_converter_grid2d.hpp"
+
+namespace edgar::generator::grid2d {
+
+template <typename TRoom>
+inline LayoutGrid2D<TRoom> Grid2DLayoutState<TRoom>::to_layout_grid() const {
+    return BasicLayoutConverterGrid2D<TRoom>::convert(*this);
+}
 
 } // namespace edgar::generator::grid2d

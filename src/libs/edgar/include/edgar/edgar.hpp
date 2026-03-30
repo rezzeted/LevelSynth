@@ -4,6 +4,7 @@
 
 #include "edgar/geometry/polygon_grid2d.hpp"
 #include "edgar/geometry/vector2_int.hpp"
+#include "edgar/generator/grid2d/basic_layout_converter_grid2d.hpp"
 #include "edgar/generator/grid2d/graph_based_generator_grid2d.hpp"
 #include "edgar/generator/grid2d/level_description_grid2d.hpp"
 #include "edgar/generator/grid2d/manual_door_mode_grid2d.hpp"

@@ -31,6 +31,8 @@
 
 В порт добавлен **альтернативный бэкенд** `strip_packing` в `GraphBasedGeneratorGrid2D` — горизонтальная укладка без SA; в оригинале как отдельный основной путь не выделен.
 
+**Конвертер layout (итерация 6):** `BasicLayoutConverterGrid2D` в `basic_layout_converter_grid2d.hpp` — граница между внутренним `Grid2DLayoutState` и публичным `LayoutGrid2D`: `convert(state)` (предусловие: все слоты `templates[i]` заданы, как раньше у `to_layout_grid`); опционально `convert(state, add_doors, rng)` через существующий `compute_layout_doors` и `level->get_graph()`. `Grid2DLayoutState::to_layout_grid()` делегирует в `BasicLayoutConverterGrid2D::convert`. Для strip-пути используется `make_room(...)` для того же набора полей `LayoutRoomGrid2D`, что и при конвертации из состояния. Полный C#-конвертер (`BasicLayoutConverterGrid2D.cs`) также учитывает IntAlias/случайные трансформации из mapping — в порте это не воспроизведено в рамках MVP.
+
 ---
 
 ## 3. Алгоритмы и логика

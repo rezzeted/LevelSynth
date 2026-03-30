@@ -103,6 +103,8 @@
 
 ## Итерация 6 — Конвертер layout
 
+**Статус:** реализовано — `BasicLayoutConverterGrid2D` в [`basic_layout_converter_grid2d.hpp`](../src/libs/edgar/include/edgar/generator/grid2d/basic_layout_converter_grid2d.hpp), делегирование из `Grid2DLayoutState::to_layout_grid`, `make_room` для strip; экспорт через [`edgar.hpp`](../src/libs/edgar/include/edgar/edgar.hpp).
+
 - Выделить `BasicLayoutConverterGrid2D`: граница между внутренним состоянием цепи/конфигураций и публичным `LayoutGrid2D`.
 
 **Тесты после итерации:**
@@ -110,6 +112,8 @@
 - Юнит-тесты конвертера: **round-trip** или «внутренний layout → `LayoutGrid2D`» с фиксированными мок-данными; сравнение полей `LayoutRoomGrid2D` (outline, position, doors при наличии).
 - Тест на **идемпотентность** или стабильность: повторная конвертация того же внутреннего состояния даёт тот же публичный layout.
 - Интеграция: один сценарий из `edgar_tests` проходит через публичный API с выделенным конвертером без регрессии JSON/room count.
+
+Покрытие в `edgar_tests.cpp`: `EdgarLayoutConverter.BasicLayoutConverter_matchesToLayoutGrid` (в т.ч. сравнение JSON), `BasicLayoutConverter_idempotent`, `BasicLayoutConverter_addDoors_matchesStandaloneCompute`, `BasicLayoutConverter_makeRoom_stripParity`.
 
 ---
 

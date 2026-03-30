@@ -191,15 +191,8 @@ LayoutGrid2D<TRoom> GraphBasedGeneratorGrid2D<TRoom>::generate_layout() {
             }
             if (!overlap) {
                 placed.push_back(Placed{outline, pos});
-                result.rooms.push_back(LayoutRoomGrid2D<TRoom>{
-                    .room = room,
-                    .outline = outline,
-                    .position = pos,
-                    .is_corridor = room_desc.is_corridor(),
-                    .room_template = tmpl,
-                    .room_description = room_desc,
-                    .transformation = tr,
-                });
+                result.rooms.push_back(
+                    BasicLayoutConverterGrid2D<TRoom>::make_room(room, outline, pos, room_desc, tmpl, tr));
 
                 const int mx = detail::max_world_x(outline, pos);
                 cursor_x = mx + level_.minimum_room_distance + 1 + configuration_.strip_gap_cells;

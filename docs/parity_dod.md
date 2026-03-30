@@ -10,6 +10,7 @@
 | **D4** | Энергия: **нулевой** суммарный штраф при корректных непересекающихся позициях; **инвариант** суммы incident vs total | `EdgarEnergy.ConstraintsEvaluator_noOverlapZeroPenalty`, `Incident_to_room_sumMatchesTwiceTotal` в `edgar_tests.cpp` |
 | **D5** | **Configuration spaces:** непустота КП / совместимые позиции в базовых кейсах | `EdgarConfigSpaces.ConfigurationSpacesGenerator_nonEmptyForMatchingSquares`, `CompatibleNonOverlapping_twoRects` в `edgar_tests.cpp`; блок `EdgarConfigSpace::*` в `edgar_parity_tests.cpp` |
 | **D6** | **Точечный численный контакт** с C# (одна из геометрических процедур) | `EdgarGeometry.OverlapAlongLine_TwoRectsMatchCsharp` в `edgar_tests.cpp` |
+| **D7** | Публичный `LayoutGrid2D` собирается через **конвертер** из `Grid2DLayoutState` (идемпотентность, опционально двери) | `EdgarLayoutConverter.BasicLayoutConverter_*` в `edgar_tests.cpp` |
 
 ## Эталонные сценарии для D2/D3 (имена `TEST`)
 
@@ -34,5 +35,13 @@
 | `SetCancellationToken` / ранняя остановка | `request_cancel` / `reset_cancellation` и `early_stop_*` в конфиге (взаимное исключение см. §2 gap) |
 
 Тесты: `GraphBasedGenerator_*` в `edgar_tests.cpp` (см. roadmap итерации 5).
+
+## Итерация 6 — конвертер layout
+
+| C# | C++ |
+|----|-----|
+| `BasicLayoutConverterGrid2D.Convert(ILayout, addDoors)` | `BasicLayoutConverterGrid2D::convert` / `convert(..., add_doors, rng)`; без полного паритета по alias/случайным трансформациям из mapping |
+
+Тесты: `EdgarLayoutConverter::*` в `edgar_tests.cpp`.
 
 См. также: [test_matrix_iteration0.md](test_matrix_iteration0.md), [port_parity_roadmap.md](port_parity_roadmap.md).

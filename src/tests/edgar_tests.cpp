@@ -706,6 +706,130 @@ TEST(EdgarGenerator, GraphBasedGenerator_strip_earlyStopElapsed_partialLayout) {
     EXPECT_LT(layout.rooms.size(), 4u);
 }
 
+TEST(EdgarLayoutConverter, BasicLayoutConverter_matchesToLayoutGrid) {
+    using namespace edgar;
+    using namespace edgar::geometry;
+    using namespace edgar::generator::grid2d;
+
+    auto square = RoomTemplateGrid2D(PolygonGrid2D::get_square(4), std::make_shared<SimpleDoorModeGrid2D>(1, 1));
+    RoomDescriptionGrid2D rd(false, {square});
+    LevelDescriptionGrid2D<int> level;
+    level.add_room(0, rd);
+    level.add_room(1, rd);
+    level.add_connection(0, 1);
+
+    Grid2DLayoutState<int> state(level);
+    state.resize_room_slots(2);
+    state.outlines[0] = PolygonGrid2D::get_square(4);
+    state.outlines[1] = PolygonGrid2D::get_square(4);
+    state.positions[0] = {0, 0};
+    state.positions[1] = {12, 0};
+    state.templates[0] = square;
+    state.templates[1] = square;
+    state.transforms[0] = TransformationGrid2D::Identity;
+    state.transforms[1] = TransformationGrid2D::Identity;
+
+    const auto a = state.to_layout_grid();
+    const auto b = BasicLayoutConverterGrid2D<int>::convert(state);
+    ASSERT_EQ(a.rooms.size(), b.rooms.size());
+    for (std::size_t i = 0; i < a.rooms.size(); ++i) {
+        EXPECT_EQ(a.rooms[i].room, b.rooms[i].room);
+        EXPECT_EQ(a.rooms[i].position.x, b.rooms[i].position.x);
+        EXPECT_EQ(a.rooms[i].position.y, b.rooms[i].position.y);
+        EXPECT_EQ(a.rooms[i].outline.points(), b.rooms[i].outline.points());
+        EXPECT_EQ(a.rooms[i].is_corridor, b.rooms[i].is_corridor);
+    }
+    const auto ja = edgar::io::layout_to_json(a);
+    const auto jb = edgar::io::layout_to_json(b);
+    EXPECT_EQ(ja.dump(), jb.dump());
+}
+
+TEST(EdgarLayoutConverter, BasicLayoutConverter_idempotent) {
+    using namespace edgar;
+    using namespace edgar::geometry;
+    using namespace edgar::generator::grid2d;
+
+    auto square = RoomTemplateGrid2D(PolygonGrid2D::get_square(4), std::make_shared<SimpleDoorModeGrid2D>(1, 1));
+    RoomDescriptionGrid2D rd(false, {square});
+    LevelDescriptionGrid2D<int> level;
+    level.add_room(0, rd);
+    level.add_room(1, rd);
+    level.add_connection(0, 1);
+
+    Grid2DLayoutState<int> state(level);
+    state.resize_room_slots(2);
+    state.outlines[0] = PolygonGrid2D::get_square(4);
+    state.outlines[1] = PolygonGrid2D::get_square(4);
+    state.positions[0] = {0, 0};
+    state.positions[1] = {12, 0};
+    state.templates[0] = square;
+    state.templates[1] = square;
+    state.transforms[0] = TransformationGrid2D::Identity;
+    state.transforms[1] = TransformationGrid2D::Identity;
+
+    const auto c1 = BasicLayoutConverterGrid2D<int>::convert(state);
+    const auto c2 = BasicLayoutConverterGrid2D<int>::convert(state);
+    ASSERT_EQ(c1.rooms.size(), c2.rooms.size());
+    for (std::size_t i = 0; i < c1.rooms.size(); ++i) {
+        EXPECT_EQ(c1.rooms[i].outline.points(), c2.rooms[i].outline.points());
+        EXPECT_EQ(c1.rooms[i].position.x, c2.rooms[i].position.x);
+    }
+}
+
+TEST(EdgarLayoutConverter, BasicLayoutConverter_addDoors_matchesStandaloneCompute) {
+    using namespace edgar;
+    using namespace edgar::geometry;
+    using namespace edgar::generator::grid2d;
+
+    auto square = RoomTemplateGrid2D(PolygonGrid2D::get_square(4), std::make_shared<SimpleDoorModeGrid2D>(1, 1));
+    RoomDescriptionGrid2D rd(false, {square});
+    LevelDescriptionGrid2D<int> level;
+    level.add_room(0, rd);
+    level.add_room(1, rd);
+    level.add_connection(0, 1);
+
+    Grid2DLayoutState<int> state(level);
+    state.resize_room_slots(2);
+    state.outlines[0] = PolygonGrid2D::get_square(4);
+    state.outlines[1] = PolygonGrid2D::get_square(4);
+    state.positions[0] = {0, 0};
+    state.positions[1] = {12, 0};
+    state.templates[0] = square;
+    state.templates[1] = square;
+    state.transforms[0] = TransformationGrid2D::Identity;
+    state.transforms[1] = TransformationGrid2D::Identity;
+
+    std::mt19937 rng_a(999);
+    const auto with_converter = BasicLayoutConverterGrid2D<int>::convert(state, true, rng_a);
+    std::mt19937 rng_b(999);
+    auto base = BasicLayoutConverterGrid2D<int>::convert(state);
+    compute_layout_doors(base, level, level.get_graph(), rng_b);
+
+    auto count_doors = [](const LayoutGrid2D<int>& lay) {
+        int n = 0;
+        for (const auto& r : lay.rooms) {
+            n += static_cast<int>(r.doors.size());
+        }
+        return n;
+    };
+    EXPECT_EQ(count_doors(with_converter), count_doors(base));
+}
+
+TEST(EdgarLayoutConverter, BasicLayoutConverter_makeRoom_stripParity) {
+    using namespace edgar;
+    using namespace edgar::geometry;
+    using namespace edgar::generator::grid2d;
+
+    auto square = RoomTemplateGrid2D(PolygonGrid2D::get_square(4), std::make_shared<SimpleDoorModeGrid2D>(1, 1));
+    RoomDescriptionGrid2D rd(false, {square});
+    const auto r = BasicLayoutConverterGrid2D<int>::make_room(0, PolygonGrid2D::get_square(4), {1, 2}, rd, square,
+                                                              TransformationGrid2D::Identity);
+    EXPECT_EQ(r.room, 0);
+    EXPECT_EQ(r.position.x, 1);
+    EXPECT_EQ(r.position.y, 2);
+    EXPECT_FALSE(r.is_corridor);
+}
+
 TEST(EdgarIo, LoadImageRgba_missingFile) {
     EXPECT_FALSE(edgar::io::load_image_rgba("nonexistent_path_that_should_not_exist.png").has_value());
 }
