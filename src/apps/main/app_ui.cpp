@@ -233,7 +233,7 @@ void draw_center_preview_panel(const PanelLayout& zone) {
 
         ImGui::BeginChild("##preview_canvas", ImVec2(0.0f, 0.0f), ImGuiChildFlags_Borders,
                           ImGuiWindowFlags_NoScrollbar);
-        draw_layout_preview_imgui(shown);
+        draw_layout_preview_imgui(shown, g_layout_index);
         ImGui::EndChild();
     } else {
         ImGui::TextDisabled("Generate a layout to see the preview.");

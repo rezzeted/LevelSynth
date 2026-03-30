@@ -6,11 +6,57 @@
 #include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <string>
 #include <unordered_map>
 
 namespace edgar::generator::grid2d {
 
 namespace {
+
+/// Normalize YAML map key under `rooms:` to a comma-separated id string for the legacy parser below.
+/// Matches original C# / YamlDotNet: scalar string, integer, or flow sequence like `[8]` / `[0,1]`.
+std::string room_override_key_to_ids_string(const YAML::Node& key) {
+    if (!key || !key.IsDefined()) {
+        throw YAML::Exception(YAML::Mark::null_mark(), "rooms: entry has undefined key");
+    }
+    if (key.IsScalar()) {
+        try {
+            return key.as<std::string>();
+        } catch (const YAML::Exception&) {
+            try {
+                return std::to_string(key.as<int>());
+            } catch (const YAML::Exception&) {
+                return std::to_string(static_cast<long long>(key.as<long long>()));
+            }
+        }
+    }
+    if (key.IsSequence()) {
+        if (key.size() == 0) {
+            throw YAML::Exception(key.Mark(), "rooms: empty sequence key");
+        }
+        std::string out;
+        for (std::size_t i = 0; i < key.size(); ++i) {
+            if (i > 0) {
+                out.push_back(',');
+            }
+            const YAML::Node& el = key[i];
+            if (!el.IsScalar()) {
+                throw YAML::Exception(el.Mark(), "rooms: sequence key entry must be scalar");
+            }
+            try {
+                out += el.as<std::string>();
+            } catch (const YAML::Exception&) {
+                try {
+                    out += std::to_string(el.as<int>());
+                } catch (const YAML::Exception&) {
+                    out += std::to_string(static_cast<long long>(el.as<long long>()));
+                }
+            }
+        }
+        return out;
+    }
+    throw YAML::Exception(key.Mark(), "rooms: unsupported key type (use string, int, or [id,...])");
+}
 
 PresetRoomSet::RoomEntry parse_room_entry(const std::string& name, const YAML::Node& node, int default_door_length,
                                           int default_corner_distance) {
@@ -62,7 +108,12 @@ PresetRoomSet load_room_set(const std::string& path) {
         return set;
     }
 
-    YAML::Node root = YAML::Load(f);
+    YAML::Node root;
+    try {
+        root = YAML::Load(f);
+    } catch (const std::exception&) {
+        return set;
+    }
     set.name = root["name"] ? root["name"].as<std::string>() : "";
 
     int def_dl = 1, def_cd = 1;
@@ -108,7 +159,7 @@ PresetMap map_from_yaml_root(const YAML::Node& root, const std::string& filename
     if (root["rooms"]) {
         for (const auto& kv : root["rooms"]) {
             PresetMap::RoomOverride ov;
-            const auto ids = kv.first.as<std::string>();
+            const std::string ids = room_override_key_to_ids_string(kv.first);
             std::stringstream ss(ids);
             std::string token;
             while (std::getline(ss, token, ',')) {
@@ -253,9 +304,13 @@ PresetCatalogLoadResult load_preset_catalog_with_status(const std::string& base_
         if (fs::exists(rooms_dir) && fs::is_directory(rooms_dir)) {
             for (const auto& entry : fs::directory_iterator(rooms_dir)) {
                 if (entry.path().extension() == ".yml") {
-                    auto rs = load_room_set(entry.path().string());
-                    if (!rs.rooms.empty()) {
-                        out.catalog.room_sets.push_back(std::move(rs));
+                    try {
+                        auto rs = load_room_set(entry.path().string());
+                        if (!rs.rooms.empty()) {
+                            out.catalog.room_sets.push_back(std::move(rs));
+                        }
+                    } catch (const std::exception&) {
+                        continue;
                     }
                 }
             }
@@ -278,12 +333,17 @@ PresetCatalogLoadResult load_preset_catalog_with_status(const std::string& base_
             YAML::Node root;
             try {
                 root = YAML::Load(f);
-            } catch (const std::exception& e) {
-                out.error = std::string("YAML parse error in ") + entry.path().string() + ": " + e.what();
-                return out;
+            } catch (const std::exception&) {
+                // Skip maps with invalid YAML (e.g. legacy C#-style keys); keep loading others.
+                continue;
             }
-            PresetMap map = map_from_yaml_root(root, entry.path().filename().string(), entry.path().stem().string());
-            out.catalog.maps.push_back(std::move(map));
+            try {
+                PresetMap map =
+                    map_from_yaml_root(root, entry.path().filename().string(), entry.path().stem().string());
+                out.catalog.maps.push_back(std::move(map));
+            } catch (const std::exception&) {
+                continue;
+            }
         }
 
         std::sort(out.catalog.maps.begin(), out.catalog.maps.end(),

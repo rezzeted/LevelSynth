@@ -39,7 +39,8 @@ void dash_line_screen(ImDrawList* dl, ImVec2 a, ImVec2 b, ImU32 col, float thick
 bool g_preview_grid_lines = true;
 bool g_preview_shading = false;
 
-void draw_layout_preview_imgui(const edgar::generator::grid2d::LayoutGrid2D<int>& layout) {
+void draw_layout_preview_imgui(const edgar::generator::grid2d::LayoutGrid2D<int>& layout,
+                               int layout_view_id) {
     using namespace edgar::generator::grid2d;
     using namespace edgar::geometry;
     if (layout.rooms.empty()) {
@@ -66,29 +67,84 @@ void draw_layout_preview_imgui(const edgar::generator::grid2d::LayoutGrid2D<int>
     const float canvas_w = std::max(100.0f, avail.x);
     const float canvas_h = std::max(200.0f, avail.y);
     const ImVec2 canvas_sz(canvas_w, canvas_h);
-    const ImVec2 canvas_p0 = ImGui::GetCursorScreenPos();
+
+    ImGui::InvisibleButton("##layout_canvas", canvas_sz);
+    const bool hovered = ImGui::IsItemHovered();
+    const ImVec2 canvas_p0 = ImGui::GetItemRectMin();
     const ImVec2 canvas_p1 = ImVec2(canvas_p0.x + canvas_sz.x, canvas_p0.y + canvas_sz.y);
 
+    // Preview view: pan (screen px) and zoom multiplier on top of fit-to-window scale.
+    static int s_last_layout_view_id = std::numeric_limits<int>::min();
+    static float s_zoom = 1.0f;
+    static ImVec2 s_pan_px(0.0f, 0.0f);
+    static bool s_middle_pan = false;
+
+    if (layout_view_id != s_last_layout_view_id) {
+        s_zoom = 1.0f;
+        s_pan_px = ImVec2(0.0f, 0.0f);
+        s_middle_pan = false;
+        s_last_layout_view_id = layout_view_id;
+    }
+
+    ImGuiIO& io = ImGui::GetIO();
+    constexpr float pad = 16.0f;
+    const float scale_fit =
+        std::min((canvas_sz.x - 2.0f * pad) / dx, (canvas_sz.y - 2.0f * pad) / dy);
+    float scale = scale_fit * s_zoom;
+
+    // Middle mouse: pan (screen-space). Drag only while middle is held; started over canvas.
+    if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Middle)) {
+        s_middle_pan = true;
+    }
+    if (!ImGui::IsMouseDown(ImGuiMouseButton_Middle)) {
+        s_middle_pan = false;
+    }
+    if (s_middle_pan) {
+        s_pan_px.x += io.MouseDelta.x;
+        s_pan_px.y += io.MouseDelta.y;
+    }
+
+    // Mouse wheel: zoom toward cursor (keep world point under cursor fixed on screen).
+    constexpr float k_zoom_wheel = 0.12f;
+    constexpr float k_zoom_min = 0.25f;
+    constexpr float k_zoom_max = 4.0f;
+    if (hovered && io.MouseWheel != 0.0f) {
+        const float mx = io.MousePos.x;
+        const float my = io.MousePos.y;
+        const float wx_old = static_cast<float>(min_x) + (mx - canvas_p0.x - pad - s_pan_px.x) / scale;
+        const float wy_old = static_cast<float>(min_y) + (my - canvas_p0.y - pad - s_pan_px.y) / scale;
+        const float zoom_factor = std::exp(io.MouseWheel * k_zoom_wheel);
+        s_zoom = std::clamp(s_zoom * zoom_factor, k_zoom_min, k_zoom_max);
+        const float scale_new = scale_fit * s_zoom;
+        s_pan_px.x = mx - canvas_p0.x - pad - (wx_old - static_cast<float>(min_x)) * scale_new;
+        s_pan_px.y = my - canvas_p0.y - pad - (wy_old - static_cast<float>(min_y)) * scale_new;
+        scale = scale_new;
+    }
+
+    // Double-click: reset view to fit (same as default pan=0, zoom=1).
+    if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+        s_zoom = 1.0f;
+        s_pan_px = ImVec2(0.0f, 0.0f);
+        scale = scale_fit * s_zoom;
+    }
+
+    auto to_screen = [&](int wx, int wy) {
+        return ImVec2(canvas_p0.x + pad + (static_cast<float>(wx - min_x)) * scale + s_pan_px.x,
+                      canvas_p0.y + pad + (static_cast<float>(wy - min_y)) * scale + s_pan_px.y);
+    };
+
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    const ImU32 k_canvas_bg = ImGui::ColorConvertFloat4ToU32(DrUI::Colors::CanvasBg);
+    // Mid gray canvas (lighter than before; black wall lines still read on empty area).
+    constexpr ImU32 k_canvas_bg = IM_COL32(72, 74, 80, 255);
     dl->AddRectFilled(canvas_p0, canvas_p1, k_canvas_bg);
     dl->PushClipRect(canvas_p0, canvas_p1, true);
 
-    constexpr float pad = 16.0f;
-    const float scale =
-        std::min((canvas_sz.x - 2.0f * pad) / dx, (canvas_sz.y - 2.0f * pad) / dy);
-
-    auto to_screen = [&](int wx, int wy) {
-        return ImVec2(canvas_p0.x + pad + (static_cast<float>(wx - min_x)) * scale,
-                      canvas_p0.y + pad + (static_cast<float>(wy - min_y)) * scale);
-    };
-
-    // C# DungeonDrawer-style colors; grid lighter so thick walls read clearly on top.
+    // C# DungeonDrawer-style fills; wall outline + interior grid + shading: black on room fill.
     constexpr ImU32 k_fill_room = IM_COL32(248, 248, 244, 255);
     constexpr ImU32 k_fill_corridor = IM_COL32(230, 240, 248, 255);
-    constexpr ImU32 k_wall = IM_COL32(50, 50, 50, 255);
-    constexpr ImU32 k_grid = IM_COL32(100, 100, 100, 120);
-    constexpr ImU32 k_shade = IM_COL32(204, 206, 206, 255);
+    constexpr ImU32 k_wall = IM_COL32(0, 0, 0, 255);
+    constexpr ImU32 k_grid = IM_COL32(0, 0, 0, 150);
+    constexpr ImU32 k_shade = IM_COL32(0, 0, 0, 255);
     constexpr float k_wall_thickness = 5.0f;
     constexpr float k_shade_thickness = 4.0f;
     constexpr float k_grid_line_thickness = 1.0f;
@@ -186,6 +242,4 @@ void draw_layout_preview_imgui(const edgar::generator::grid2d::LayoutGrid2D<int>
 
     dl->PopClipRect();
     dl->AddRect(canvas_p0, canvas_p1, ImGui::ColorConvertFloat4ToU32(DrUI::Colors::Border));
-
-    ImGui::Dummy(canvas_sz);
 }
