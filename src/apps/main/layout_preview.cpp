@@ -1,5 +1,7 @@
 #include "layout_preview.hpp"
 
+#include "drui/drui.h"
+
 #include "edgar/geometry/orthogonal_line_grid2d.hpp"
 #include "edgar/geometry/polygon_grid2d.hpp"
 #include "edgar/io/layout_grid_cells.hpp"
@@ -68,8 +70,7 @@ void draw_layout_preview_imgui(const edgar::generator::grid2d::LayoutGrid2D<int>
     const ImVec2 canvas_p1 = ImVec2(canvas_p0.x + canvas_sz.x, canvas_p0.y + canvas_sz.y);
 
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    // Light gray canvas (distinct from room fill and dark walls).
-    constexpr ImU32 k_canvas_bg = IM_COL32(232, 234, 236, 255);
+    const ImU32 k_canvas_bg = ImGui::ColorConvertFloat4ToU32(DrUI::Colors::CanvasBg);
     dl->AddRectFilled(canvas_p0, canvas_p1, k_canvas_bg);
     dl->PushClipRect(canvas_p0, canvas_p1, true);
 
@@ -184,7 +185,7 @@ void draw_layout_preview_imgui(const edgar::generator::grid2d::LayoutGrid2D<int>
     }
 
     dl->PopClipRect();
-    dl->AddRect(canvas_p0, canvas_p1, IM_COL32(160, 162, 170, 255));
+    dl->AddRect(canvas_p0, canvas_p1, ImGui::ColorConvertFloat4ToU32(DrUI::Colors::Border));
 
     ImGui::Dummy(canvas_sz);
 }

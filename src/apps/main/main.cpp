@@ -1,15 +1,22 @@
 #define SDL_MAIN_HANDLED
 
-#include "imgui.h"
-#include "imgui_impl_sdl3.h"
-#include "imgui_impl_opengl3.h"
+#include "app_state.hpp"
+#include "app_ui.hpp"
+#include "editor_layout.hpp"
 #include "file_dialogs.hpp"
 #include "layout_preview.hpp"
 #include "preset_loader.hpp"
+
+#include "drui/drui.h"
+
+#include "imgui.h"
+#include "imgui_impl_sdl3.h"
+#include "imgui_impl_opengl3.h"
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
 #include <SDL3/SDL_opengl.h>
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <exception>
@@ -27,7 +34,7 @@
 #include "edgar/generator/grid2d/layout_door_computation.hpp"
 #include "edgar/io/layout_json.hpp"
 
-namespace {
+namespace ls {
 
 edgar::generator::grid2d::PresetCatalog g_catalog;
 bool g_catalog_loaded = false;
@@ -35,7 +42,6 @@ int g_selected_preset = 0;
 
 edgar::generator::grid2d::GraphBasedGeneratorConfiguration g_gen_config;
 
-char g_edgar_log[512] = "Select a preset and click Generate.";
 std::vector<edgar::generator::grid2d::LayoutGrid2D<int>> g_layouts;
 int g_layout_index = 0;
 bool g_use_random_seed = false;
@@ -78,17 +84,17 @@ void apply_catalog_load(edgar::generator::grid2d::PresetCatalogLoadResult&& r) {
         g_catalog = PresetCatalog{};
         g_catalog_loaded = false;
         g_selected_preset = 0;
-        std::snprintf(g_edgar_log, sizeof(g_edgar_log), "Load error: %s", r.error.c_str());
+        app_log_push_fmt("Load error: %s", r.error.c_str());
         return;
     }
     g_catalog = std::move(r.catalog);
     g_catalog_loaded = !g_catalog.maps.empty();
     g_selected_preset = 0;
     if (g_catalog_loaded) {
-        std::snprintf(g_edgar_log, sizeof(g_edgar_log), "Loaded %zu map(s), %zu room set(s) | base: %s",
-                      g_catalog.maps.size(), g_catalog.room_sets.size(), g_catalog.base_path.c_str());
+        app_log_push_fmt("Loaded %zu map(s), %zu room set(s) | base: %s", g_catalog.maps.size(),
+                         g_catalog.room_sets.size(), g_catalog.base_path.c_str());
     } else {
-        std::snprintf(g_edgar_log, sizeof(g_edgar_log), "No maps found under: %s", g_catalog.base_path.c_str());
+        app_log_push_fmt("No maps found under: %s", g_catalog.base_path.c_str());
     }
 }
 
@@ -170,10 +176,8 @@ void generate_from_preset(int preset_idx, unsigned rng_seed) {
         total_doors += static_cast<int>(room.doors.size());
     }
 
-    std::snprintf(g_edgar_log, sizeof(g_edgar_log),
-                  "Generated %d layout(s) from '%s' | rooms=%d  doors=%d  time=%.2f ms  iters=%d",
-                  n, map.display_name.c_str(), g_last_rooms, total_doors,
-                  g_last_time_ms, g_last_iterations);
+    app_log_push_fmt("Generated %d layout(s) from '%s' | rooms=%d  doors=%d  time=%.2f ms  iters=%d", n,
+                     map.display_name.c_str(), g_last_rooms, total_doors, g_last_time_ms, g_last_iterations);
 }
 
 void generate_hardcoded(unsigned rng_seed) {
@@ -217,12 +221,11 @@ void generate_hardcoded(unsigned rng_seed) {
         g_last_iterations = generator.iterations_count();
     }
 
-    std::snprintf(g_edgar_log, sizeof(g_edgar_log),
-                  "Generated %d layout(s) (4-room cycle) | rooms=%d  time=%.2f ms  iters=%d",
-                  n, g_last_rooms, g_last_time_ms, g_last_iterations);
+    app_log_push_fmt("Generated %d layout(s) (4-room cycle) | rooms=%d  time=%.2f ms  iters=%d", n, g_last_rooms,
+                     g_last_time_ms, g_last_iterations);
 }
 
-} // namespace
+} // namespace ls
 
 int main(int argc, char* argv[])
 {
@@ -230,7 +233,7 @@ int main(int argc, char* argv[])
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 #endif
 
-    parse_cli_args(argc, argv);
+    ls::parse_cli_args(argc, argv);
 
     SDL_SetMainReady();
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS)) {
@@ -242,10 +245,9 @@ int main(int argc, char* argv[])
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
 
-    const int window_width = 1280;
-    const int window_height = 720;
-    const SDL_WindowFlags window_flags = SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE
-        | SDL_WINDOW_HIGH_PIXEL_DENSITY;
+    const int window_width = 1600;
+    const int window_height = 1000;
+    const SDL_WindowFlags window_flags = SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
     SDL_Window* window = SDL_CreateWindow("LevelSynth", window_width, window_height, window_flags);
     if (!window) {
         (void)fprintf(stderr, "SDL_CreateWindow failed: %s\n", SDL_GetError());
@@ -269,49 +271,45 @@ int main(int argc, char* argv[])
     io.ConfigFlags |= ImGuiConfigFlags_DpiEnableScaleFonts;
     io.ConfigFlags |= ImGuiConfigFlags_DpiEnableScaleViewports;
 
-    ImGui::StyleColorsDark();
+    int lw = 0, lh = 0, pw = 0, ph = 0;
+    SDL_GetWindowSize(window, &lw, &lh);
+    SDL_GetWindowSizeInPixels(window, &pw, &ph);
+    const float fb_scale = (lw > 0) ? static_cast<float>(pw) / static_cast<float>(lw) : 1.0f;
 
-    ImGuiIO& io_ref = ImGui::GetIO();
-    ImFontConfig font_cfg;
-    font_cfg.OversampleH = 2;
-    font_cfg.OversampleV = 2;
-    font_cfg.PixelSnapH = true;
-    const float font_size_px = 19.0f;
-#ifdef _WIN32
-    const char* font_paths[] = {
-        "C:\\Windows\\Fonts\\segoeui.ttf",
-        "C:\\Windows\\Fonts\\seguiui.ttf",
-        "C:\\Windows\\Fonts\\arial.ttf",
-    };
-    for (const char* path : font_paths) {
-        if (io_ref.Fonts->AddFontFromFileTTF(path, font_size_px, &font_cfg) != nullptr)
-            break;
+    float display_scale = SDL_GetWindowDisplayScale(window);
+    if (display_scale < 0.01f) {
+        display_scale = 1.0f;
     }
-#else
-    const char* font_paths[] = {
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-        "/usr/share/fonts/TTF/DejaVuSans.ttf",
-    };
-    for (const char* path : font_paths) {
-        if (io_ref.Fonts->AddFontFromFileTTF(path, font_size_px, &font_cfg) != nullptr)
-            break;
+    const float content_scale = std::clamp(display_scale, 1.0f, 3.0f);
+    const float dpi_scale = content_scale / std::max(fb_scale, 0.001f);
+    const float font_scale = content_scale;
+    ImGui::GetStyle().FontScaleMain = 1.0f / std::max(fb_scale, 0.001f);
+
+    ImFont* default_font = DrUI::SetupFonts(io, font_scale);
+    if (default_font) {
+        io.FontDefault = default_font;
     }
-#endif
+    DrUI::ApplyTheme(DrUI::ThemeId::Dark, dpi_scale);
 
     ImGui_ImplSDL3_InitForOpenGL(window, gl_context);
     ImGui_ImplOpenGL3_Init("#version 130");
 
-    if (!g_catalog_from_argv) {
+    app_log_push("Select a preset and click Generate.");
+
+    if (!ls::g_catalog_from_argv) {
         try {
-            reload_catalog_from_resources_dir(g_resources_path);
+            ls::reload_catalog_from_resources_dir(ls::g_resources_path);
         } catch (...) {
-            g_catalog_loaded = false;
-            std::snprintf(g_edgar_log, sizeof(g_edgar_log), "Exception while loading resources.");
+            ls::g_catalog_loaded = false;
+            app_log_push("Exception while loading resources.");
         }
     }
 
-    constexpr float k_settings_panel_w = 360.0f;
+    EditorSplitters splitters;
+    PanelVisibility panels;
+    panels.dpi_scale = dpi_scale;
+
+    bool initial_left_panel_height_fit = false;
 
     bool running = true;
     while (running) {
@@ -334,19 +332,20 @@ int main(int argc, char* argv[])
                     if (dp.has_extension()) {
                         const auto ext = dp.extension().string();
                         if (ext == ".yml" || ext == ".yaml") {
-                            reload_catalog_from_map_file(dropped);
-                            if (g_catalog_loaded && !g_catalog.base_path.empty()) {
-                                std::strncpy(g_resources_path, g_catalog.base_path.c_str(), sizeof(g_resources_path) - 1);
-                                g_resources_path[sizeof(g_resources_path) - 1] = '\0';
+                            ls::reload_catalog_from_map_file(dropped);
+                            if (ls::g_catalog_loaded && !ls::g_catalog.base_path.empty()) {
+                                std::strncpy(ls::g_resources_path, ls::g_catalog.base_path.c_str(),
+                                             sizeof(ls::g_resources_path) - 1);
+                                ls::g_resources_path[sizeof(ls::g_resources_path) - 1] = '\0';
                             }
                         } else if (fs::is_directory(dp)) {
-                            std::strncpy(g_resources_path, dropped.c_str(), sizeof(g_resources_path) - 1);
-                            g_resources_path[sizeof(g_resources_path) - 1] = '\0';
-                            reload_catalog_from_resources_dir(dropped);
+                            std::strncpy(ls::g_resources_path, dropped.c_str(), sizeof(ls::g_resources_path) - 1);
+                            ls::g_resources_path[sizeof(ls::g_resources_path) - 1] = '\0';
+                            ls::reload_catalog_from_resources_dir(dropped);
                         }
                     }
                 } catch (const std::exception& e) {
-                    std::snprintf(g_edgar_log, sizeof(g_edgar_log), "Drop error: %s", e.what());
+                    app_log_push_fmt("Drop error: %s", e.what());
                 }
             }
         }
@@ -355,175 +354,68 @@ int main(int argc, char* argv[])
         ImGui_ImplSDL3_NewFrame();
         ImGui::NewFrame();
 
-        ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f));
-        ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
-
-        if (ImGui::Begin("LevelSynth", nullptr,
-                         ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove
-                             | ImGuiWindowFlags_NoBringToFrontOnFocus)) {
-
-            ImGui::BeginChild("##settings", ImVec2(k_settings_panel_w, 0.0f), true);
-
-            ImGui::SeparatorText("Resources");
-            ImGui::InputText("Base path", g_resources_path, sizeof(g_resources_path));
-            if (ImGui::Button("Browse folder…", ImVec2(-1.0f, 0.0f))) {
-                std::string p;
-                if (pick_folder_dialog(p)) {
-                    std::strncpy(g_resources_path, p.c_str(), sizeof(g_resources_path) - 1);
-                    g_resources_path[sizeof(g_resources_path) - 1] = '\0';
-                    try {
-                        reload_catalog_from_resources_dir(g_resources_path);
-                    } catch (const std::exception& e) {
-                        std::snprintf(g_edgar_log, sizeof(g_edgar_log), "Error: %s", e.what());
-                    }
-                }
-            }
-            if (ImGui::Button("Open map file…", ImVec2(-1.0f, 0.0f))) {
-                std::string p;
-                if (pick_open_yaml_file(p)) {
-                    try {
-                        reload_catalog_from_map_file(p);
-                        if (g_catalog_loaded && !g_catalog.base_path.empty()) {
-                            std::strncpy(g_resources_path, g_catalog.base_path.c_str(), sizeof(g_resources_path) - 1);
-                            g_resources_path[sizeof(g_resources_path) - 1] = '\0';
-                        }
-                    } catch (const std::exception& e) {
-                        std::snprintf(g_edgar_log, sizeof(g_edgar_log), "Error: %s", e.what());
-                    }
-                }
-            }
-            if (ImGui::Button("Reload from path", ImVec2(-1.0f, 0.0f))) {
-                try {
-                    reload_catalog_from_resources_dir(std::string(g_resources_path));
-                } catch (const std::exception& e) {
-                    std::snprintf(g_edgar_log, sizeof(g_edgar_log), "Error: %s", e.what());
-                }
-            }
-            ImGui::Spacing();
-
-            ImGui::SeparatorText("Preset");
-            if (g_catalog_loaded) {
-                const int n_maps = static_cast<int>(g_catalog.maps.size());
-                g_selected_preset = std::clamp(g_selected_preset, 0, n_maps - 1);
-                const auto& cur = g_catalog.maps[static_cast<std::size_t>(g_selected_preset)];
-
-                if (ImGui::BeginCombo("Map", cur.display_name.c_str())) {
-                    for (int i = 0; i < n_maps; ++i) {
-                        const bool selected = (i == g_selected_preset);
-                        if (ImGui::Selectable(g_catalog.maps[static_cast<std::size_t>(i)].display_name.c_str(), selected)) {
-                            g_selected_preset = i;
-                        }
-                        if (selected) ImGui::SetItemDefaultFocus();
-                    }
-                    ImGui::EndCombo();
-                }
-
-                ImGui::Text("Rooms: %d-%d | Passages: %d",
-                    cur.room_from, cur.room_to, static_cast<int>(cur.passages.size()));
-                ImGui::Text("Corridors: %s", cur.corridors_enabled ? "Yes" : "No");
-            } else {
-                ImGui::TextUnformatted("No presets found (resources/edgar_gui)");
-                ImGui::TextUnformatted("Using built-in 4-room cycle");
-            }
-            ImGui::Spacing();
-
-            ImGui::SeparatorText("Generation");
-            ImGui::Checkbox("Random seed", &g_use_random_seed);
-            if (!g_use_random_seed) {
-                ImGui::InputInt("Seed", &g_seed);
-            }
-            ImGui::InputInt("Layouts", &g_num_layouts);
-            g_num_layouts = std::clamp(g_num_layouts, 1, 64);
-            ImGui::Checkbox("Compute doors", &g_compute_doors);
-            ImGui::Spacing();
-
-            auto& sa = g_gen_config.simulated_annealing;
-            ImGui::SeparatorText("SA Configuration");
-            ImGui::InputInt("Cycles", &sa.cycles);
-            sa.cycles = std::max(sa.cycles, 1);
-            ImGui::InputInt("Trials/cycle", &sa.trials_per_cycle);
-            sa.trials_per_cycle = std::max(sa.trials_per_cycle, 1);
-            ImGui::InputInt("Max iters w/o success", &sa.max_iterations_without_success);
-            sa.max_iterations_without_success = std::max(sa.max_iterations_without_success, 1);
-            ImGui::InputInt("Max stage2 failures", &sa.max_stage_two_failures);
-            sa.max_stage_two_failures = std::max(sa.max_stage_two_failures, 1);
-            ImGui::InputInt("Max perturb radius", &sa.max_perturbation_radius);
-            sa.max_perturbation_radius = std::max(sa.max_perturbation_radius, 1);
-            ImGui::Checkbox("Handle trees greedily", &sa.handle_trees_greedily);
-
-            if (ImGui::Button("Generate", ImVec2(-1.0f, 0.0f))) {
-                try {
-                    unsigned seed = 0;
-                    if (g_use_random_seed) {
-                        std::random_device rd;
-                        seed = rd();
-                    } else {
-                        seed = static_cast<unsigned>(g_seed);
-                    }
-
-                    if (g_catalog_loaded) {
-                        generate_from_preset(g_selected_preset, seed);
-                    } else {
-                        generate_hardcoded(seed);
-                    }
-                } catch (const std::exception& e) {
-                    std::snprintf(g_edgar_log, sizeof(g_edgar_log), "Error: %s", e.what());
-                    g_layouts.clear();
-                    g_layout_index = 0;
-                    g_last_rooms = -1;
-                }
-            }
-
-            ImGui::Spacing();
-            if (!g_layouts.empty()) {
-                if (ImGui::Button("Export JSON", ImVec2(-1.0f, 0.0f))) {
-                    g_export_pending = true;
-                }
-            }
-
-            ImGui::EndChild();
-
-            ImGui::SameLine();
-
-            ImGui::BeginChild("##canvas", ImVec2(0.0f, 0.0f), true);
-            ImGui::SeparatorText("Generator");
-            ImGui::TextWrapped("%s", g_edgar_log);
-
-            if (g_layouts.size() > 1) {
-                const int max_i = static_cast<int>(g_layouts.size()) - 1;
-                g_layout_index = std::clamp(g_layout_index, 0, max_i);
-                ImGui::SliderInt("Shown layout", &g_layout_index, 0, max_i);
-            }
-
-            if (!g_layouts.empty() && g_layout_index >= 0
-                && g_layout_index < static_cast<int>(g_layouts.size())
-                && !g_layouts[static_cast<size_t>(g_layout_index)].rooms.empty()) {
-
-                const auto& shown = g_layouts[static_cast<size_t>(g_layout_index)];
-
-                ImGui::Separator();
-                int total_doors = 0;
-                for (const auto& room : shown.rooms) {
-                    total_doors += static_cast<int>(room.doors.size());
-                }
-                ImGui::Text("Layout %d/%d  |  rooms=%d  doors=%d",
-                    g_layout_index + 1, static_cast<int>(g_layouts.size()),
-                    static_cast<int>(shown.rooms.size()), total_doors);
-
-                ImGui::Checkbox("Preview grid lines", &g_preview_grid_lines);
-                ImGui::Checkbox("Preview wall shading", &g_preview_shading);
-                ImGui::TextUnformatted("Layout preview (DungeonDrawer-style fill + walls):");
-                draw_layout_preview_imgui(shown);
-            }
-            ImGui::EndChild();
+        float cs = std::max(io.DisplayFramebufferScale.x, io.DisplayFramebufferScale.y);
+        if (cs < 0.01f) {
+            cs = 1.0f;
         }
-        ImGui::End();
+        panels.dpi_scale = cs / std::max(fb_scale, 0.001f);
+        const float gap = 8.0f * panels.dpi_scale;
 
-        if (g_export_pending && !g_layouts.empty()) {
-            g_export_pending = false;
+        bool request_quit = false;
+        bool menu_export = false;
+        ls::draw_main_menu_bar(request_quit, menu_export, panels);
+        if (request_quit) {
+            running = false;
+        }
+        if (menu_export && !ls::g_layouts.empty()) {
+            ls::g_export_pending = true;
+        }
+
+        bool shortcut_export = false;
+        ls::handle_keyboard_shortcuts(shortcut_export);
+        if (shortcut_export && !ls::g_layouts.empty()) {
+            ls::g_export_pending = true;
+        }
+
+        ImGuiViewport* vp = ImGui::GetMainViewport();
+        const float status_h = panels.status_bar ? ls::compute_status_bar_height(panels.dpi_scale) : 0.0f;
+        const EditorLayout layout = CalculateLayout(vp, gap, 0.0f, status_h, splitters, panels);
+        HandleSplitters(layout, gap, vp, 0.0f, status_h, splitters, panels);
+
+        if (panels.show_left_panel) {
+            ls::draw_left_settings_panel(layout.left);
+            if (!initial_left_panel_height_fit) {
+                constexpr float k_fit_slack_px = 6.0f;
+                const float need_h = ls::g_left_panel_content_height_px + k_fit_slack_px;
+                if (layout.left.size.y + 0.5f < need_h) {
+                    const float delta = need_h - layout.left.size.y;
+                    int sw = 0;
+                    int sh = 0;
+                    SDL_GetWindowSize(window, &sw, &sh);
+                    SDL_SetWindowSize(window, sw, sh + static_cast<int>(std::ceil(delta)));
+                }
+                initial_left_panel_height_fit = true;
+            }
+        }
+        ls::draw_center_preview_panel(layout.center);
+        if (panels.show_log_panel) {
+            ls::draw_bottom_log_panel(layout.bottom, panels);
+        }
+
+        DrawSplitterIndicators(layout, splitters, panels);
+
+        DrUI::ToastAnchor anchor{layout.center.pos, layout.center.size};
+        DrUI::DrawToasts(anchor);
+
+        if (panels.status_bar) {
+            ls::draw_status_bar(panels.dpi_scale, status_h);
+        }
+
+        if (ls::g_export_pending && !ls::g_layouts.empty()) {
+            ls::g_export_pending = false;
             try {
-                const auto& layout = g_layouts[static_cast<size_t>(g_layout_index)];
-                auto j = edgar::io::layout_to_json(layout);
+                const auto& layout_json = ls::g_layouts[static_cast<size_t>(ls::g_layout_index)];
+                auto j = edgar::io::layout_to_json(layout_json);
                 std::string json_str = j.dump(2);
                 std::string out_path;
                 if (pick_save_json_file(out_path)) {
@@ -535,16 +427,14 @@ int main(int argc, char* argv[])
                         std::error_code ec;
                         const fs::path abs = fs::weakly_canonical(fs::absolute(out_path), ec);
                         const std::string show = ec ? out_path : abs.string();
-                        std::snprintf(g_edgar_log, sizeof(g_edgar_log),
-                                      "Exported layout to %s (%d rooms)", show.c_str(),
-                                      static_cast<int>(layout.rooms.size()));
+                        app_log_push_fmt("Exported layout to %s (%d rooms)", show.c_str(),
+                                         static_cast<int>(layout_json.rooms.size()));
                     } else {
-                        std::snprintf(g_edgar_log, sizeof(g_edgar_log), "Export failed: cannot open %s",
-                                      out_path.c_str());
+                        app_log_push_fmt("Export failed: cannot open %s", out_path.c_str());
                     }
                 } else {
 #if defined(_WIN32)
-                    std::snprintf(g_edgar_log, sizeof(g_edgar_log), "Export cancelled");
+                    app_log_push("Export cancelled");
 #else
                     std::string filename = "layout_export.json";
                     auto f = fopen(filename.c_str(), "wb");
@@ -555,23 +445,23 @@ int main(int argc, char* argv[])
                         std::error_code ec;
                         const fs::path abs = fs::weakly_canonical(fs::absolute(filename), ec);
                         const std::string show = ec ? filename : abs.string();
-                        std::snprintf(g_edgar_log, sizeof(g_edgar_log),
-                                      "Exported layout to %s (no save dialog; %d rooms)", show.c_str(),
-                                      static_cast<int>(layout.rooms.size()));
+                        app_log_push_fmt("Exported layout to %s (no save dialog; %d rooms)", show.c_str(),
+                                         static_cast<int>(layout_json.rooms.size()));
                     }
 #endif
                 }
             } catch (const std::exception& e) {
-                std::snprintf(g_edgar_log, sizeof(g_edgar_log), "Export error: %s", e.what());
+                app_log_push_fmt("Export error: %s", e.what());
             }
         }
 
         ImGui::Render();
         SDL_GL_MakeCurrent(window, gl_context);
-        const int fb_w = (int)(io.DisplaySize.x * io.DisplayFramebufferScale.x);
-        const int fb_h = (int)(io.DisplaySize.y * io.DisplayFramebufferScale.y);
+        const int fb_w = static_cast<int>(io.DisplaySize.x * io.DisplayFramebufferScale.x);
+        const int fb_h = static_cast<int>(io.DisplaySize.y * io.DisplayFramebufferScale.y);
         glViewport(0, 0, fb_w, fb_h);
-        glClearColor(0.1f, 0.1f, 0.12f, 1.0f);
+        glClearColor(DrUI::Colors::BackgroundPrimary.x, DrUI::Colors::BackgroundPrimary.y,
+                     DrUI::Colors::BackgroundPrimary.z, DrUI::Colors::BackgroundPrimary.w);
         glClear(GL_COLOR_BUFFER_BIT);
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
         SDL_GL_SwapWindow(window);
