@@ -1,6 +1,6 @@
-# ImGui + SDL3 + OpenGL3
+# LevelSynth — ImGui + SDL3 + OpenGL3
 
-Минимальное приложение на C++20 с Dear ImGui, SDL3 и OpenGL 3. Библиотека **edgar** (порт Edgar-DotNet) для процедурной раскладки комнат. Сборка через **CMake**; зависимости задаются **манифестом vcpkg** ([`vcpkg.json`](vcpkg.json)), сам **vcpkg** — **git submodule** в [`toolchain/vcpkg`](toolchain/vcpkg).
+Приложение **LevelSynth** на C++20 с Dear ImGui, SDL3 и OpenGL 3 (CMake-проект в репозитории: `ImguiPlayground`). Библиотека **edgar** — порт [Edgar-DotNet](https://github.com/OndrejNepozitek/Edgar-DotNet) для процедурной раскладки комнат. Сборка через **CMake**; зависимости задаются **манифестом vcpkg** ([`vcpkg.json`](vcpkg.json)), сам **vcpkg** — **git submodule** в [`toolchain/vcpkg`](toolchain/vcpkg).
 
 ---
 
@@ -16,6 +16,8 @@
 
 ## Сборка (vcpkg)
 
+Каталог сборки задаётся пресетом (по умолчанию **`_build`** в корне репозитория, см. [`CMakePresets.json`](CMakePresets.json)); при ручном `cmake -B` используйте согласованный путь.
+
 Проще всего: из корня репозитория запустить [`build_vs.bat`](build_vs.bat) — он вызывает **`cmake --preset vs2026`** и **`cmake --build --preset debug`** (все пути vcpkg, triplet и overlay заданы в [`CMakePresets.json`](CMakePresets.json)).
 
 Ручная конфигурация (эквивалент по смыслу):
@@ -30,7 +32,7 @@ cmake --build _build --config Debug
 
 Либо пресеты [`CMakePresets.json`](CMakePresets.json): `cmake --preset vs2026`, затем `cmake --build --preset release` (triplet **`x64-windows-static`**, toolchain и overlay в пресете). Для Ninja без VS: `cmake --preset default`. Для VS 2022: пресет `vs2022` и build `debug-vs2022` / `release-vs2022`.
 
-Исполняемые файлы: `_build/bin/<Config>/main.exe`, тесты: `_build/bin/<Config>/edgar_tests.exe`, `preset_loader_tests.exe`.
+Исполняемый файл приложения: `_build/bin/<Config>/main.exe`. Тесты: `_build/bin/<Config>/edgar_tests.exe`, `edgar_parity_tests.exe`, `preset_loader_tests.exe`, `generation_diagnostic_test.exe`.
 
 Пакеты из манифеста устанавливаются в каталог **`vcpkg_installed/`** рядом с билдом (в `.gitignore`).
 
@@ -44,7 +46,9 @@ cmake --build _build --config Debug
 
 | Порт | Назначение |
 |------|------------|
-| nlohmann-json, fmt, spdlog, stb | edgar: JSON, логи, PNG |
+| nlohmann-json, fmt, stb | edgar: JSON, PNG |
+| spdlog | логи (edgar/диагностика; тест `generation_diagnostic_test`) |
+| yaml-cpp | пресеты карт и YAML в приложении (`preset_loader`) |
 | boost-graph | edgar: планарные грани, проверка планарности (Boost.Graph) |
 | gtest | тесты |
 | sdl3, imgui (+ docking, sdl3, opengl3) | окно и ImGui |
@@ -59,21 +63,29 @@ cmake --build _build --config Debug
 ├── vcpkg.json
 ├── toolchain/vcpkg/          # git submodule vcpkg
 ├── thirdparty/CMakeLists.txt # find_package + imgui_impl INTERFACE
-├── src/libs/edgar/           # библиотека edgar
+├── src/libs/edgar/           # библиотека edgar (генерация уровней)
+├── src/libs/drui/            # темы, тосты, иконки поверх ImGui
 ├── src/apps/main/
 ├── src/tests/
+├── test_data/                # сценарии для ручных/parity-прогонов (см. test_data/parity/)
 ├── resources/edgar_gui/      # копия из референса (см. ниже)
-└── docs/port_vs_original_gap.md
-    docs/port_parity_roadmap.md
+└── docs/
+    port_vs_original_gap.md
+    port_parity_roadmap.md
+    parity_dod.md
+    test_matrix_iteration0.md
+    …
 ```
 
 ### Приложение LevelSynth (main) и YAML
 
-Паритет сценариев с Edgar.GUI (открытие ресурсов, экспорт): [`docs/app_gui_parity.md`](docs/app_gui_parity.md). Схема ключей YAML пресетов: [`docs/app_yaml_preset.md`](docs/app_yaml_preset.md).
+Паритет сценариев с Edgar.GUI (ресурсы, экспорт): [`docs/app_gui_parity.md`](docs/app_gui_parity.md). Схема ключей YAML пресетов: [`docs/app_yaml_preset.md`](docs/app_yaml_preset.md).
 
-- Базовая папка по умолчанию: `resources/edgar_gui` рядом с `main.exe` (копируется при сборке).
-- В UI: поле пути, **Browse folder**, **Open map file…**, **Reload**; на Windows — диалог сохранения JSON при экспорте.
-- CLI: `main.exe --resources <dir>` и/или `main.exe <path\to\map.yml>`.
+- **Корень ресурсов по умолчанию:** при старте ищется каталог `resources/edgar_gui`, содержащий подпапки **`Maps/`** и **`Rooms/`**: обход вверх от каталога `main.exe` (удобно при запуске из `_build/bin/...` в клоне репозитория). Рядом с exe CMake **копирует** `resources/edgar_gui` из репозитория.
+- **Каталог карт:** в выпадающем списке показываются только **`.yml`/`.yaml` непосредственно в `Maps/`** (без рекурсии в подпапки). Подпись в UI указывает на `<repo>/resources/edgar_gui/Maps/`.
+- **Панель Map:** комбо выбора карты, отображение текущего пути ресурсов, кнопка **Reload catalog**. Экспорт JSON — через меню **File → Export JSON** (на Windows — диалог сохранения).
+- **Перетаскивание на окно:** можно сбросить **папку** с `Maps/` и `Rooms/` (корень `edgar_gui`) или отдельный файл карты — каталог обновится соответственно.
+- **CLI:** опциональный аргумент — путь к файлу **`*.yml` / `*.yaml`** карты; загружается эта карта, база ресурсов выводится из пути (см. [`preset_loader.cpp`](src/apps/main/preset_loader.cpp)).
 
 ### Ресурсы Edgar.GUI (копия из референса)
 
@@ -111,12 +123,19 @@ robocopy %CD%\_edgar_ref\src\Resources %CD%\resources\edgar_gui /E
 
 ## Тесты
 
-- `enable_testing()` в корневом CMake, цели в `src/tests/`.
-- Запуск: `ctest -C Debug` из каталога сборки.
+- `enable_testing()` в корневом CMake, цели в [`src/tests/`](src/tests/).
+- Исполняемые файлы: **`edgar_tests`**, **`edgar_parity_tests`**, **`preset_loader_tests`**, **`generation_diagnostic_test`** (в `bin/<Config>/`).
+- Запуск: `ctest -C Debug` (или `Release`) из каталога сборки.
 
 ---
 
 ## Стиль и документация
 
 - Код на **C++20**.
-- Порт Edgar: расхождения с оригиналом — [`docs/port_vs_original_gap.md`](docs/port_vs_original_gap.md); roadmap паритета — [`docs/port_parity_roadmap.md`](docs/port_parity_roadmap.md). **Итерация 0 (агент):** [`docs/iteration_0_agent_brief.md`](docs/iteration_0_agent_brief.md).
+- **Порт edgar:** генерация и ограничения (энергия, конфигурационные пространства, двери) приводятся к соответствию с Edgar-DotNet; подробности — [`docs/port_vs_original_gap.md`](docs/port_vs_original_gap.md), roadmap — [`docs/port_parity_roadmap.md`](docs/port_parity_roadmap.md). Итерация 0 (агент): [`docs/iteration_0_agent_brief.md`](docs/iteration_0_agent_brief.md). Критерии parity: [`docs/parity_dod.md`](docs/parity_dod.md), матрица тестов: [`docs/test_matrix_iteration0.md`](docs/test_matrix_iteration0.md).
+
+---
+
+## Лицензия
+
+Проект **LevelSynth** распространяется под лицензией **MIT**.
