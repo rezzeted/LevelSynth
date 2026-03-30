@@ -18,8 +18,6 @@
 
 namespace ls {
 
-float g_left_panel_content_height_px = 0.0f;
-
 void handle_keyboard_shortcuts(bool& request_export) {
     ImGuiIO& io = ImGui::GetIO();
     if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_E)) {
@@ -197,10 +195,6 @@ void draw_left_settings_panel(const PanelLayout& zone) {
             g_export_pending = true;
         }
     }
-
-    const ImGuiStyle& st = ImGui::GetStyle();
-    g_left_panel_content_height_px =
-        ImGui::GetCursorPosY() + st.WindowPadding.y + st.ItemSpacing.y * 0.5f;
 
     ImGui::End();
 }

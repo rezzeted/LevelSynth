@@ -4,9 +4,6 @@
 
 namespace ls {
 
-// Set each frame while drawing the left settings panel: content height (px) for fit-on-open logic.
-extern float g_left_panel_content_height_px;
-
 void draw_main_menu_bar(bool& request_quit, bool& menu_export_json, PanelVisibility& panels);
 
 void draw_left_settings_panel(const PanelLayout& zone);

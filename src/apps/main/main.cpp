@@ -16,7 +16,6 @@
 #include <SDL3/SDL_main.h>
 #include <SDL3/SDL_opengl.h>
 #include <algorithm>
-#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <exception>
@@ -245,8 +244,9 @@ int main(int argc, char* argv[])
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
 
-    const int window_width = 1600;
-    const int window_height = 1000;
+    constexpr float k_initial_window_scale = 1.5f;
+    const int window_width = static_cast<int>(1600 * k_initial_window_scale);
+    const int window_height = static_cast<int>(1000 * k_initial_window_scale);
     const SDL_WindowFlags window_flags = SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
     SDL_Window* window = SDL_CreateWindow("LevelSynth", window_width, window_height, window_flags);
     if (!window) {
@@ -308,8 +308,6 @@ int main(int argc, char* argv[])
     EditorSplitters splitters;
     PanelVisibility panels;
     panels.dpi_scale = dpi_scale;
-
-    bool initial_left_panel_height_fit = false;
 
     bool running = true;
     while (running) {
@@ -384,18 +382,6 @@ int main(int argc, char* argv[])
 
         if (panels.show_left_panel) {
             ls::draw_left_settings_panel(layout.left);
-            if (!initial_left_panel_height_fit) {
-                constexpr float k_fit_slack_px = 6.0f;
-                const float need_h = ls::g_left_panel_content_height_px + k_fit_slack_px;
-                if (layout.left.size.y + 0.5f < need_h) {
-                    const float delta = need_h - layout.left.size.y;
-                    int sw = 0;
-                    int sh = 0;
-                    SDL_GetWindowSize(window, &sw, &sh);
-                    SDL_SetWindowSize(window, sw, sh + static_cast<int>(std::ceil(delta)));
-                }
-                initial_left_panel_height_fit = true;
-            }
         }
         ls::draw_center_preview_panel(layout.center);
         if (panels.show_log_panel) {

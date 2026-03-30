@@ -31,7 +31,7 @@ struct PanelVisibility {
     bool show_left_panel = true;
     bool show_log_panel = true;
     bool status_bar = true;
-    bool bottom_collapsed = false;
+    bool bottom_collapsed = true;
     float dpi_scale = 1.0f;
 };
 
