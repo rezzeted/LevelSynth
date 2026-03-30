@@ -57,6 +57,20 @@ struct PresetCatalog {
     std::string base_path;
 };
 
+/// Result of loading a catalog; `error` empty on success.
+struct PresetCatalogLoadResult {
+    PresetCatalog catalog;
+    std::string error;
+};
+
+/// Load all `Rooms/*.yml` and `Maps/*.yml` under `base_path`.
+PresetCatalogLoadResult load_preset_catalog_with_status(const std::string& base_path);
+
+/// Load room sets from base next to `Maps/`, only the map file `map_yml_path` (must exist).
+/// `map_yml_path` should live under `.../Maps/name.yml`; base is derived as parent of `Maps`.
+PresetCatalogLoadResult load_preset_catalog_from_map_file(const std::string& map_yml_path);
+
+/// Legacy: on failure returns empty maps (prefer `load_preset_catalog_with_status`).
 PresetCatalog load_preset_catalog(const std::string& base_path);
 
 LevelDescriptionGrid2D<int> build_level_from_preset(

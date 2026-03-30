@@ -3,13 +3,17 @@
 #include <yaml-cpp/yaml.h>
 
 #include <algorithm>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <unordered_map>
 
 namespace edgar::generator::grid2d {
 
-static PresetRoomSet::RoomEntry parse_room_entry(const std::string& name, const YAML::Node& node,
-                                                  int default_door_length, int default_corner_distance) {
+namespace {
+
+PresetRoomSet::RoomEntry parse_room_entry(const std::string& name, const YAML::Node& node, int default_door_length,
+                                          int default_corner_distance) {
     PresetRoomSet::RoomEntry entry;
     entry.name = name;
 
@@ -38,7 +42,7 @@ static PresetRoomSet::RoomEntry parse_room_entry(const std::string& name, const 
             for (const auto& dp : dm["doorPositions"]) {
                 entry.specific_doors.push_back({
                     edgar::geometry::Vector2Int{dp[0][0].as<int>(), dp[0][1].as<int>()},
-                    edgar::geometry::Vector2Int{dp[1][0].as<int>(), dp[1][1].as<int>()}
+                    edgar::geometry::Vector2Int{dp[1][0].as<int>(), dp[1][1].as<int>()},
                 });
             }
         }
@@ -51,7 +55,7 @@ static PresetRoomSet::RoomEntry parse_room_entry(const std::string& name, const 
     return entry;
 }
 
-static PresetRoomSet load_room_set(const std::string& path) {
+PresetRoomSet load_room_set(const std::string& path) {
     PresetRoomSet set;
     std::ifstream f(path);
     if (!f.is_open()) {
@@ -85,155 +89,271 @@ static PresetRoomSet load_room_set(const std::string& path) {
     return set;
 }
 
-PresetCatalog load_preset_catalog(const std::string& base_path) {
-    PresetCatalog catalog;
-    catalog.base_path = base_path;
+PresetMap map_from_yaml_root(const YAML::Node& root, const std::string& filename, const std::string& display_name) {
+    PresetMap map;
+    map.filename = filename;
+    map.display_name = display_name;
 
-    const std::string rooms_dir = base_path + "/Rooms";
-    for (const auto& entry : std::filesystem::directory_iterator(rooms_dir)) {
-        if (entry.path().extension() == ".yml") {
-            auto rs = load_room_set(entry.path().string());
-            if (!rs.rooms.empty()) {
-                catalog.room_sets.push_back(std::move(rs));
+    if (root["roomsRange"]) {
+        map.room_from = root["roomsRange"]["from"].as<int>();
+        map.room_to = root["roomsRange"]["to"].as<int>();
+    }
+
+    if (root["passages"]) {
+        for (const auto& p : root["passages"]) {
+            map.passages.push_back({p[0].as<int>(), p[1].as<int>()});
+        }
+    }
+
+    if (root["rooms"]) {
+        for (const auto& kv : root["rooms"]) {
+            PresetMap::RoomOverride ov;
+            const auto ids = kv.first.as<std::string>();
+            std::stringstream ss(ids);
+            std::string token;
+            while (std::getline(ss, token, ',')) {
+                int val = 0;
+                bool neg = false;
+                std::string trimmed;
+                for (char c : token) {
+                    if (c == '-') {
+                        neg = true;
+                    } else if (c == ' ' || c == '[' || c == ']') {
+                    } else {
+                        trimmed += c;
+                    }
+                }
+                for (char c : trimmed) {
+                    val = val * 10 + (c - '0');
+                }
+                if (neg) {
+                    val = -val;
+                }
+                ov.room_ids.push_back(val);
+            }
+            const auto& shapes = kv.second["roomShapes"];
+            if (shapes) {
+                for (const auto& s : shapes) {
+                    if (s.IsMap()) {
+                        if (s["roomDescriptionName"]) {
+                            ov.room_description_names.push_back(s["roomDescriptionName"].as<std::string>());
+                        }
+                    }
+                }
+            }
+            map.room_overrides.push_back(std::move(ov));
+        }
+    }
+
+    if (root["defaultRoomShapes"]) {
+        for (const auto& s : root["defaultRoomShapes"]) {
+            PresetMap::DefaultRoomShapes drs;
+            if (s.IsMap()) {
+                drs.set_name = s["setName"].as<std::string>();
+                if (s["roomDescriptionName"]) {
+                    drs.room_description_name = s["roomDescriptionName"].as<std::string>();
+                }
+                if (s["scale"]) {
+                    for (const auto& v : s["scale"]) {
+                        drs.scale.push_back(v.as<int>());
+                    }
+                }
+            } else if (s.IsScalar()) {
+                drs.set_name = s.as<std::string>();
+            }
+            map.default_room_shapes.push_back(std::move(drs));
+        }
+    }
+
+    if (root["customRoomDescriptionsSet"]) {
+        map.has_custom_descriptions = true;
+        const auto& crd = root["customRoomDescriptionsSet"];
+        int cdl = 1, ccd = 1;
+        if (const auto& def = crd["default"]) {
+            if (def["doorMode"]) {
+                if (def["doorMode"]["doorLength"]) {
+                    cdl = def["doorMode"]["doorLength"].as<int>();
+                }
+                if (def["doorMode"]["cornerDistance"]) {
+                    ccd = def["doorMode"]["cornerDistance"].as<int>();
+                }
+            }
+        }
+        map.custom_descriptions.default_door_length = cdl;
+        map.custom_descriptions.default_corner_distance = ccd;
+        map.custom_descriptions.has_defaults = true;
+        if (const auto& rds = crd["roomDescriptions"]) {
+            for (const auto& kv : rds) {
+                map.custom_descriptions.rooms.push_back(
+                    parse_room_entry(kv.first.as<std::string>(), kv.second, cdl, ccd));
             }
         }
     }
 
-    const std::string maps_dir = base_path + "/Maps";
-    for (const auto& entry : std::filesystem::directory_iterator(maps_dir)) {
-        if (entry.path().extension() != ".yml") {
-            continue;
+    if (root["corridors"]) {
+        const auto& corr = root["corridors"];
+        map.corridors_enabled = corr["enable"] ? corr["enable"].as<bool>() : false;
+        if (corr["offsets"]) {
+            for (const auto& o : corr["offsets"]) {
+                map.corridor_offsets.push_back(o.as<int>());
+            }
         }
-        std::ifstream f(entry.path().string());
+        if (corr["corridorShapes"]) {
+            for (const auto& cs : corr["corridorShapes"]) {
+                PresetMap::DefaultRoomShapes drs;
+                if (cs.IsMap()) {
+                    drs.set_name = cs["setName"].as<std::string>();
+                } else if (cs.IsScalar()) {
+                    drs.set_name = cs.as<std::string>();
+                }
+                map.corridor_shapes.push_back(std::move(drs));
+            }
+        }
+    }
+
+    return map;
+}
+
+std::filesystem::path resolve_resource_base_for_map(const std::filesystem::path& map_file, std::string& err) {
+    namespace fs = std::filesystem;
+    const fs::path parent = map_file.parent_path();
+    if (parent.filename() == "Maps") {
+        return parent.parent_path();
+    }
+    const fs::path rooms_sibling = parent / "Rooms";
+    if (fs::exists(rooms_sibling) && fs::is_directory(rooms_sibling)) {
+        return parent;
+    }
+    const fs::path rooms_up = parent.parent_path() / "Rooms";
+    if (fs::exists(rooms_up) && fs::is_directory(rooms_up)) {
+        return parent.parent_path();
+    }
+    err = "Cannot find resource root: put the map under .../Maps/name.yml or next to a Rooms/ folder.";
+    return {};
+}
+
+} // namespace
+
+PresetCatalogLoadResult load_preset_catalog_with_status(const std::string& base_path) {
+    PresetCatalogLoadResult out;
+    namespace fs = std::filesystem;
+    try {
+        const fs::path base(base_path);
+        if (!fs::exists(base)) {
+            out.error = "Resource path does not exist: " + base_path;
+            return out;
+        }
+        if (!fs::is_directory(base)) {
+            out.error = "Resource path is not a directory: " + base_path;
+            return out;
+        }
+
+        out.catalog.base_path = base_path;
+        const fs::path rooms_dir = base / "Rooms";
+        if (fs::exists(rooms_dir) && fs::is_directory(rooms_dir)) {
+            for (const auto& entry : fs::directory_iterator(rooms_dir)) {
+                if (entry.path().extension() == ".yml") {
+                    auto rs = load_room_set(entry.path().string());
+                    if (!rs.rooms.empty()) {
+                        out.catalog.room_sets.push_back(std::move(rs));
+                    }
+                }
+            }
+        }
+
+        const fs::path maps_dir = base / "Maps";
+        if (!fs::exists(maps_dir) || !fs::is_directory(maps_dir)) {
+            out.error = "No Maps/ directory under: " + base_path;
+            return out;
+        }
+
+        for (const auto& entry : fs::directory_iterator(maps_dir)) {
+            if (entry.path().extension() != ".yml" && entry.path().extension() != ".yaml") {
+                continue;
+            }
+            std::ifstream f(entry.path().string());
+            if (!f.is_open()) {
+                continue;
+            }
+            YAML::Node root;
+            try {
+                root = YAML::Load(f);
+            } catch (const std::exception& e) {
+                out.error = std::string("YAML parse error in ") + entry.path().string() + ": " + e.what();
+                return out;
+            }
+            PresetMap map = map_from_yaml_root(root, entry.path().filename().string(), entry.path().stem().string());
+            out.catalog.maps.push_back(std::move(map));
+        }
+
+        std::sort(out.catalog.maps.begin(), out.catalog.maps.end(),
+                  [](const PresetMap& a, const PresetMap& b) { return a.display_name < b.display_name; });
+        std::sort(out.catalog.room_sets.begin(), out.catalog.room_sets.end(),
+                  [](const PresetRoomSet& a, const PresetRoomSet& b) { return a.name < b.name; });
+    } catch (const std::exception& e) {
+        out.error = std::string("Failed to load catalog: ") + e.what();
+    }
+    return out;
+}
+
+PresetCatalogLoadResult load_preset_catalog_from_map_file(const std::string& map_yml_path) {
+    PresetCatalogLoadResult out;
+    namespace fs = std::filesystem;
+    try {
+        const fs::path map_file = fs::absolute(map_yml_path);
+        if (!fs::exists(map_file)) {
+            out.error = "Map file does not exist: " + map_yml_path;
+            return out;
+        }
+        std::string resolve_err;
+        fs::path base = resolve_resource_base_for_map(map_file, resolve_err);
+        if (base.empty()) {
+            out.error = resolve_err;
+            return out;
+        }
+
+        PresetCatalogLoadResult full = load_preset_catalog_with_status(base.string());
+        if (!full.error.empty()) {
+            return full;
+        }
+
+        const std::string target_name = map_file.filename().string();
+        std::vector<PresetMap> filtered;
+        for (auto& m : full.catalog.maps) {
+            if (m.filename == target_name) {
+                filtered.push_back(std::move(m));
+            }
+        }
+
+        if (!filtered.empty()) {
+            full.catalog.maps = std::move(filtered);
+            return full;
+        }
+
+        // Parse standalone file (e.g. filename mismatch or not under scanned Maps/)
+        std::ifstream f(map_file.string());
         if (!f.is_open()) {
-            continue;
+            out.error = "Cannot open: " + map_file.string();
+            return out;
         }
         YAML::Node root = YAML::Load(f);
-
-        PresetMap map;
-        map.filename = entry.path().filename().string();
-        map.display_name = entry.path().stem().string();
-
-        if (root["roomsRange"]) {
-            map.room_from = root["roomsRange"]["from"].as<int>();
-            map.room_to = root["roomsRange"]["to"].as<int>();
-        }
-
-        if (root["passages"]) {
-            for (const auto& p : root["passages"]) {
-                map.passages.push_back({p[0].as<int>(), p[1].as<int>()});
-            }
-        }
-
-        if (root["rooms"]) {
-            for (const auto& kv : root["rooms"]) {
-                PresetMap::RoomOverride ov;
-                const auto ids = kv.first.as<std::string>();
-                std::stringstream ss(ids);
-                std::string token;
-                while (std::getline(ss, token, ',')) {
-                    int val = 0;
-                    bool neg = false;
-                    std::string trimmed;
-                    for (char c : token) {
-                        if (c == '-') {
-                            neg = true;
-                        } else if (c == ' ' || c == '[' || c == ']') {
-                        } else {
-                            trimmed += c;
-                        }
-                    }
-                    for (char c : trimmed) {
-                        val = val * 10 + (c - '0');
-                    }
-                    if (neg) val = -val;
-                    ov.room_ids.push_back(val);
-                }
-                const auto& shapes = kv.second["roomShapes"];
-                if (shapes) {
-                    for (const auto& s : shapes) {
-                        if (s.IsMap()) {
-                            if (s["roomDescriptionName"]) {
-                                ov.room_description_names.push_back(s["roomDescriptionName"].as<std::string>());
-                            }
-                        }
-                    }
-                }
-                map.room_overrides.push_back(std::move(ov));
-            }
-        }
-
-        if (root["defaultRoomShapes"]) {
-            for (const auto& s : root["defaultRoomShapes"]) {
-                PresetMap::DefaultRoomShapes drs;
-                if (s.IsMap()) {
-                    drs.set_name = s["setName"].as<std::string>();
-                    if (s["roomDescriptionName"]) {
-                        drs.room_description_name = s["roomDescriptionName"].as<std::string>();
-                    }
-                    if (s["scale"]) {
-                        for (const auto& v : s["scale"]) {
-                            drs.scale.push_back(v.as<int>());
-                        }
-                    }
-                } else if (s.IsScalar()) {
-                    drs.set_name = s.as<std::string>();
-                }
-                map.default_room_shapes.push_back(std::move(drs));
-            }
-        }
-
-        if (root["customRoomDescriptionsSet"]) {
-            map.has_custom_descriptions = true;
-            const auto& crd = root["customRoomDescriptionsSet"];
-            int cdl = 1, ccd = 1;
-            if (const auto& def = crd["default"]) {
-                if (def["doorMode"]) {
-                    if (def["doorMode"]["doorLength"]) cdl = def["doorMode"]["doorLength"].as<int>();
-                    if (def["doorMode"]["cornerDistance"]) ccd = def["doorMode"]["cornerDistance"].as<int>();
-                }
-            }
-            map.custom_descriptions.default_door_length = cdl;
-            map.custom_descriptions.default_corner_distance = ccd;
-            map.custom_descriptions.has_defaults = true;
-            if (const auto& rds = crd["roomDescriptions"]) {
-                for (const auto& kv : rds) {
-                    map.custom_descriptions.rooms.push_back(
-                        parse_room_entry(kv.first.as<std::string>(), kv.second, cdl, ccd));
-                }
-            }
-        }
-
-        if (root["corridors"]) {
-            const auto& corr = root["corridors"];
-            map.corridors_enabled = corr["enable"] ? corr["enable"].as<bool>() : false;
-            if (corr["offsets"]) {
-                for (const auto& o : corr["offsets"]) {
-                    map.corridor_offsets.push_back(o.as<int>());
-                }
-            }
-            if (corr["corridorShapes"]) {
-                for (const auto& cs : corr["corridorShapes"]) {
-                    PresetMap::DefaultRoomShapes drs;
-                    if (cs.IsMap()) {
-                        drs.set_name = cs["setName"].as<std::string>();
-                    } else if (cs.IsScalar()) {
-                        drs.set_name = cs.as<std::string>();
-                    }
-                    map.corridor_shapes.push_back(std::move(drs));
-                }
-            }
-        }
-
-        catalog.maps.push_back(std::move(map));
+        PresetMap map =
+            map_from_yaml_root(root, map_file.filename().string(), map_file.stem().string());
+        full.catalog.maps = {std::move(map)};
+        full.error.clear();
+        return full;
+    } catch (const std::exception& e) {
+        out.error = std::string("load_preset_catalog_from_map_file: ") + e.what();
+        return out;
     }
+}
 
-    std::sort(catalog.maps.begin(), catalog.maps.end(),
-              [](const PresetMap& a, const PresetMap& b) { return a.display_name < b.display_name; });
-    std::sort(catalog.room_sets.begin(), catalog.room_sets.end(),
-              [](const PresetRoomSet& a, const PresetRoomSet& b) { return a.name < b.name; });
-
-    return catalog;
+PresetCatalog load_preset_catalog(const std::string& base_path) {
+    auto r = load_preset_catalog_with_status(base_path);
+    if (!r.error.empty()) {
+        return PresetCatalog{};
+    }
+    return std::move(r.catalog);
 }
 
 static const PresetRoomSet::RoomEntry* find_room_entry(
@@ -268,8 +388,7 @@ static RoomTemplateGrid2D build_room_template(const PresetRoomSet::RoomEntry& en
     return RoomTemplateGrid2D(std::move(poly), std::move(door_mode), entry.name);
 }
 
-LevelDescriptionGrid2D<int> build_level_from_preset(
-    const PresetMap& map, const std::vector<PresetRoomSet>& room_sets) {
+LevelDescriptionGrid2D<int> build_level_from_preset(const PresetMap& map, const std::vector<PresetRoomSet>& room_sets) {
 
     LevelDescriptionGrid2D<int> level;
 
@@ -290,7 +409,9 @@ LevelDescriptionGrid2D<int> build_level_from_preset(
             if (!found) {
                 for (const auto& drs : map.default_room_shapes) {
                     found = find_room_entry(room_sets, drs.set_name, rn);
-                    if (found) break;
+                    if (found) {
+                        break;
+                    }
                 }
             }
             if (found) {

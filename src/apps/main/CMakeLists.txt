@@ -1,6 +1,11 @@
 find_package(yaml-cpp CONFIG REQUIRED)
 
-add_executable(main main.cpp layout_preview.cpp preset_loader.cpp)
+set(MAIN_SOURCES main.cpp layout_preview.cpp preset_loader.cpp)
+if(WIN32)
+    list(APPEND MAIN_SOURCES file_dialogs.cpp)
+endif()
+
+add_executable(main ${MAIN_SOURCES})
 target_link_libraries(main PRIVATE imgui_impl edgar yaml-cpp::yaml-cpp)
 
 # Bundle Edgar.GUI-style assets (mirrors Edgar-DotNet `src/Resources`: MapDescriptions, Maps, etc.)

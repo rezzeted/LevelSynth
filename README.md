@@ -30,7 +30,7 @@ cmake --build _build --config Debug
 
 Либо пресеты [`CMakePresets.json`](CMakePresets.json): `cmake --preset vs2026`, затем `cmake --build --preset release` (triplet **`x64-windows-static`**, toolchain и overlay в пресете). Для Ninja без VS: `cmake --preset default`. Для VS 2022: пресет `vs2022` и build `debug-vs2022` / `release-vs2022`.
 
-Исполняемые файлы: `_build/bin/<Config>/main.exe`, тесты: `_build/bin/<Config>/edgar_tests.exe`.
+Исполняемые файлы: `_build/bin/<Config>/main.exe`, тесты: `_build/bin/<Config>/edgar_tests.exe`, `preset_loader_tests.exe`.
 
 Пакеты из манифеста устанавливаются в каталог **`vcpkg_installed/`** рядом с билдом (в `.gitignore`).
 
@@ -66,6 +66,14 @@ cmake --build _build --config Debug
 └── docs/port_vs_original_gap.md
     docs/port_parity_roadmap.md
 ```
+
+### Приложение LevelSynth (main) и YAML
+
+Паритет сценариев с Edgar.GUI (открытие ресурсов, экспорт): [`docs/app_gui_parity.md`](docs/app_gui_parity.md). Схема ключей YAML пресетов: [`docs/app_yaml_preset.md`](docs/app_yaml_preset.md).
+
+- Базовая папка по умолчанию: `resources/edgar_gui` рядом с `main.exe` (копируется при сборке).
+- В UI: поле пути, **Browse folder**, **Open map file…**, **Reload**; на Windows — диалог сохранения JSON при экспорте.
+- CLI: `main.exe --resources <dir>` и/или `main.exe <path\to\map.yml>`.
 
 ### Ресурсы Edgar.GUI (копия из референса)
 
