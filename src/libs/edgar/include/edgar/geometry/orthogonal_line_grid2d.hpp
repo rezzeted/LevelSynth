@@ -48,6 +48,11 @@ struct OrthogonalLineGrid2D {
     /// Rotate; if `normalize_after`, orient `from`→`to` along the canonical direction (C# `Rotate(..., normalize)`).
     OrthogonalLineGrid2D rotate(int degrees_clockwise, bool normalize_after) const;
 
+    /// Swap from/to (C# `SwitchOrientation`).
+    OrthogonalLineGrid2D switch_orientation() const {
+        return OrthogonalLineGrid2D(to, from);
+    }
+
     /// Canonical `from`→`to` for the line direction (C# `GetNormalized`).
     OrthogonalLineGrid2D normalized() const;
 
@@ -68,5 +73,8 @@ private:
 };
 
 OrthogonalDirection opposite_direction(OrthogonalDirection d);
+
+/// Rotates a direction by the given number of clockwise degrees (must be a multiple of 90).
+OrthogonalDirection rotate_direction(OrthogonalDirection d, int degrees_clockwise);
 
 } // namespace edgar::geometry

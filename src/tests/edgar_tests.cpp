@@ -305,15 +305,20 @@ TEST(EdgarGeometry, GridPolygonPartitioning_PlusShape) {
     EXPECT_TRUE(partition_matches_any(parts, alts));
 }
 
-TEST(EdgarGeometry, OverlapAlongLine_discreteSweep) {
+TEST(EdgarGeometry, OverlapAlongLine_TwoRectsMatchCsharp) {
     using namespace edgar::geometry;
     const auto a = PolygonGrid2D::get_rectangle(3, 2);
     const auto b = PolygonGrid2D::get_rectangle(3, 2);
-    const OrthogonalLineGrid2D line({-5, 0}, {5, 0});
-    const auto ev = overlap_along_line(a, b, line);
-    EXPECT_FALSE(ev.empty());
+    const OrthogonalLineGrid2D line_h({-5, 0}, {5, 0});
+    const OrthogonalLineGrid2D line_v({0, -4}, {0, 4});
+    const auto result_h = overlap_along_line(a, b, line_h);
+    const auto result_v = overlap_along_line(a, b, line_v);
+    ASSERT_EQ(result_h.size(), 2u);
+    EXPECT_EQ(result_h[0].first, Vector2Int(-2, 0));
+    EXPECT_TRUE(result_h[0].second);
+    EXPECT_EQ(result_h[1].first, Vector2Int(3, 0));
+    EXPECT_FALSE(result_h[1].second);
 }
-
 TEST(EdgarGeometry, OverlapAlongLine_mergedMatchesBruteforce) {
     using namespace edgar::geometry;
     const auto a = PolygonGrid2D::get_rectangle(3, 2);

@@ -139,4 +139,14 @@ OrthogonalLineGrid2D OrthogonalLineGrid2D::shrink(int from_amount, int to_amount
     return OrthogonalLineGrid2D(moved_from, moved_to).rotate(-rot);
 }
 
+OrthogonalDirection rotate_direction(OrthogonalDirection d, int degrees_clockwise) {
+    if (d == OrthogonalDirection::Undefined) {
+        throw std::invalid_argument("rotate_direction: undefined direction");
+    }
+    const int base = static_cast<int>(d) - 1; // Top=0, Right=1, Bottom=2, Left=3
+    const int steps = ((degrees_clockwise / 90) % 4 + 4) % 4;
+    const int result = ((base + steps) % 4) + 1;
+    return static_cast<OrthogonalDirection>(result);
+}
+
 } // namespace edgar::geometry

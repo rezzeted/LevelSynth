@@ -13,9 +13,121 @@ bool rectangles_overlap_open(const RectangleGrid2D& a, const RectangleGrid2D& b)
     return a.a.x < b.b.x && a.b.x > b.a.x && a.a.y < b.b.y && a.b.y > b.a.y;
 }
 
+static std::vector<RectangleGrid2D> safe_partition(const PolygonGrid2D& poly) {
+    try {
+        return partition_orthogonal_polygon_to_rectangles(poly);
+    } catch (...) {
+        return {};
+    }
+}
+
+using EventList = std::vector<std::pair<Vector2Int, bool>>;
+
+static EventList overlap_along_line_rect_rect(const RectangleGrid2D& moving_rect,
+                                              const RectangleGrid2D& fixed_rect,
+                                              const OrthogonalLineGrid2D& line,
+                                              int moving_rect_offset) {
+    RectangleGrid2D bounding(moving_rect.a + line.from, moving_rect.b + line.to);
+    if (!rectangles_overlap_open(bounding, fixed_rect)) {
+        return {};
+    }
+    EventList events;
+    const int moving_width = moving_rect.b.x - moving_rect.a.x;
+    if (fixed_rect.a.x - moving_width - moving_rect_offset <= line.from.x) {
+        events.push_back({line.from, true});
+    }
+    if (fixed_rect.a.x > line.from.x + moving_width + moving_rect_offset) {
+        events.push_back({Vector2Int(fixed_rect.a.x - moving_width + 1 - moving_rect_offset, line.from.y), true});
+    }
+    if (fixed_rect.b.x - moving_rect_offset < line.to.x) {
+        events.push_back({Vector2Int(fixed_rect.b.x - moving_rect_offset, line.from.y), false});
+    }
+    return events;
+}
+
+static EventList merge_events(EventList events1, EventList events2, const OrthogonalLineGrid2D& line) {
+    if (events1.empty()) return events2;
+    if (events2.empty()) return events1;
+    EventList merged;
+    std::size_t i1 = 0, i2 = 0;
+    bool last_overlap = false;
+    bool overlap1 = false, overlap2 = false;
+    while (i1 < events1.size() && i2 < events2.size()) {
+        const auto& p1 = events1[i1];
+        const int pos1 = line.index_of_point(p1.first);
+        const auto& p2 = events2[i2];
+        const int pos2 = line.index_of_point(p2.first);
+        if (pos1 <= pos2) {
+            overlap1 = p1.second;
+            ++i1;
+        }
+        if (pos1 >= pos2) {
+            overlap2 = p2.second;
+            ++i2;
+        }
+        const bool overlap = overlap1 || overlap2;
+        if (overlap != last_overlap) {
+            if (pos1 < pos2) {
+                merged.push_back({p1.first, overlap});
+            } else {
+                merged.push_back({p2.first, overlap});
+            }
+        }
+        last_overlap = overlap;
+    }
+    if (!events2.back().second) {
+        while (i1 < events1.size()) {
+            const auto& pair = events1[i1];
+            if (merged.back().second != pair.second) {
+                merged.push_back(pair);
+            }
+            ++i1;
+        }
+    }
+    if (!events1.back().second) {
+        while (i2 < events2.size()) {
+            const auto& pair = events2[i2];
+            if (merged.back().second != pair.second) {
+                merged.push_back(pair);
+            }
+            ++i2;
+        }
+    }
+    return merged;
+}
+
+static EventList reverse_events(const EventList& events, const OrthogonalLineGrid2D& line) {
+    if (events.empty()) return events;
+    EventList reversed = events;
+    std::reverse(reversed.begin(), reversed.end());
+    EventList result;
+    if (events.back().second) {
+        result.push_back({line.to, true});
+    }
+    const auto dir = line.direction_vector();
+    for (const auto& ev : reversed) {
+        if (!(ev.first == line.from && ev.second)) {
+            result.push_back({ev.first - dir, !ev.second});
+        }
+    }
+    return result;
+}
+
+static EventList overlap_along_line_rect_rects(const RectangleGrid2D& moving_rect,
+                                               const std::vector<RectangleGrid2D>& fixed_rects,
+                                               const OrthogonalLineGrid2D& line,
+                                               int moving_rect_offset) {
+    EventList events;
+    for (const auto& fixed_rect : fixed_rects) {
+        auto new_events = overlap_along_line_rect_rect(moving_rect, fixed_rect, line, moving_rect_offset);
+        events = merge_events(std::move(events), std::move(new_events), line);
+    }
+    return events;
+}
+
 static bool moving_fixed_overlap_at(const PolygonGrid2D& moving, const PolygonGrid2D& fixed, Vector2Int position) {
-    const auto mr = partition_orthogonal_polygon_to_rectangles(moving);
-    const auto fr = partition_orthogonal_polygon_to_rectangles(fixed);
+    const auto mr = safe_partition(moving);
+    const auto fr = safe_partition(fixed);
     if (mr.empty() || fr.empty()) {
         return polygons_overlap_area(moving, position, fixed, {0, 0});
     }
@@ -30,122 +142,6 @@ static bool moving_fixed_overlap_at(const PolygonGrid2D& moving, const PolygonGr
     return false;
 }
 
-static std::vector<std::pair<int, int>> merge_union_intervals(std::vector<std::pair<int, int>> v) {
-    if (v.empty()) {
-        return {};
-    }
-    std::sort(v.begin(), v.end());
-    std::vector<std::pair<int, int>> out;
-    int lo = v[0].first;
-    int hi = v[0].second;
-    for (std::size_t i = 1; i < v.size(); ++i) {
-        if (v[i].first <= hi + 1) {
-            hi = std::max(hi, v[i].second);
-        } else {
-            out.push_back({lo, hi});
-            lo = v[i].first;
-            hi = v[i].second;
-        }
-    }
-    out.push_back({lo, hi});
-    return out;
-}
-
-static bool interval_union_contains(const std::vector<std::pair<int, int>>& merged, int x) {
-    for (const auto& iv : merged) {
-        if (x >= iv.first && x <= iv.second) {
-            return true;
-        }
-    }
-    return false;
-}
-
-/// For a horizontal scan line `y_line`, union of integer `tx` where any pair (m,f) has open overlap after shift (tx,
-/// y_line). Matches `rectangles_overlap_open` on merged rectangle partitions.
-static std::vector<std::pair<int, int>> overlap_tx_intervals_horizontal(const std::vector<RectangleGrid2D>& mr,
-                                                                        const std::vector<RectangleGrid2D>& fr,
-                                                                        int y_line, int tx_min, int tx_max) {
-    std::vector<std::pair<int, int>> raw;
-    raw.reserve(mr.size() * fr.size());
-    for (const auto& m : mr) {
-        for (const auto& f : fr) {
-            if (m.a.y + y_line >= f.b.y || m.b.y + y_line <= f.a.y) {
-                continue;
-            }
-            const int lo = f.a.x - m.b.x + 1;
-            const int hi = f.b.x - m.a.x - 1;
-            const int cl = std::max(lo, tx_min);
-            const int cr = std::min(hi, tx_max);
-            if (cl <= cr) {
-                raw.push_back({cl, cr});
-            }
-        }
-    }
-    return merge_union_intervals(std::move(raw));
-}
-
-static std::vector<std::pair<int, int>> overlap_ty_intervals_vertical(const std::vector<RectangleGrid2D>& mr,
-                                                                        const std::vector<RectangleGrid2D>& fr,
-                                                                        int x_line, int ty_min, int ty_max) {
-    std::vector<std::pair<int, int>> raw;
-    raw.reserve(mr.size() * fr.size());
-    for (const auto& m : mr) {
-        for (const auto& f : fr) {
-            if (m.a.x + x_line >= f.b.x || m.b.x + x_line <= f.a.x) {
-                continue;
-            }
-            const int lo = f.a.y - m.b.y + 1;
-            const int hi = f.b.y - m.a.y - 1;
-            const int cl = std::max(lo, ty_min);
-            const int cr = std::min(hi, ty_max);
-            if (cl <= cr) {
-                raw.push_back({cl, cr});
-            }
-        }
-    }
-    return merge_union_intervals(std::move(raw));
-}
-
-static std::vector<std::pair<Vector2Int, bool>> events_along_line_merged(const std::vector<RectangleGrid2D>& mr,
-                                                                         const std::vector<RectangleGrid2D>& fr,
-                                                                         const OrthogonalLineGrid2D& line) {
-    const auto pts = line.grid_points_inclusive();
-    std::vector<std::pair<Vector2Int, bool>> events;
-    std::optional<bool> prev;
-
-    if (line.from.x == line.to.x) {
-        const int x_line = line.from.x;
-        const int ty_min = std::min(line.from.y, line.to.y);
-        const int ty_max = std::max(line.from.y, line.to.y);
-        const auto merged = overlap_ty_intervals_vertical(mr, fr, x_line, ty_min, ty_max);
-        for (const Vector2Int& p : pts) {
-            const bool ov = interval_union_contains(merged, p.y);
-            if (!prev.has_value() || ov != *prev) {
-                events.push_back({p, ov});
-                prev = ov;
-            }
-        }
-        return events;
-    }
-
-    if (line.from.y == line.to.y) {
-        const int y_line = line.from.y;
-        const int tx_min = std::min(line.from.x, line.to.x);
-        const int tx_max = std::max(line.from.x, line.to.x);
-        const auto merged = overlap_tx_intervals_horizontal(mr, fr, y_line, tx_min, tx_max);
-        for (const Vector2Int& p : pts) {
-            const bool ov = interval_union_contains(merged, p.x);
-            if (!prev.has_value() || ov != *prev) {
-                events.push_back({p, ov});
-                prev = ov;
-            }
-        }
-        return events;
-    }
-
-    return events;
-}
-
 namespace detail {
 
 std::vector<std::pair<Vector2Int, bool>> overlap_along_line_polygon_partition_bruteforce(
@@ -155,7 +151,10 @@ std::vector<std::pair<Vector2Int, bool>> overlap_along_line_polygon_partition_br
     std::optional<bool> prev;
     for (const Vector2Int& p : pts) {
         const bool ov = moving_fixed_overlap_at(moving_polygon, fixed_polygon, p);
-        if (!prev.has_value() || ov != *prev) {
+        if (!prev.has_value()) {
+            if (ov) events.push_back({p, ov});
+            prev = ov;
+        } else if (ov != *prev) {
             events.push_back({p, ov});
             prev = ov;
         }
@@ -165,15 +164,39 @@ std::vector<std::pair<Vector2Int, bool>> overlap_along_line_polygon_partition_br
 
 } // namespace detail
 
-std::vector<std::pair<Vector2Int, bool>> overlap_along_line_polygon_partition(const PolygonGrid2D& moving_polygon,
-                                                                              const PolygonGrid2D& fixed_polygon,
-                                                                              const OrthogonalLineGrid2D& line) {
-    const auto mr = partition_orthogonal_polygon_to_rectangles(moving_polygon);
-    const auto fr = partition_orthogonal_polygon_to_rectangles(fixed_polygon);
-    if (mr.empty() || fr.empty()) {
+std::vector<std::pair<Vector2Int, bool>> overlap_along_line_polygon_partition(
+    const PolygonGrid2D& moving_polygon,
+    const PolygonGrid2D& fixed_polygon,
+    const OrthogonalLineGrid2D& line) {
+    const auto dir = line.get_direction();
+    const bool reverse = (dir == OrthogonalDirection::Bottom || dir == OrthogonalDirection::Left);
+    auto working_line = reverse ? line.switch_orientation() : line;
+    const int rotation = working_line.compute_rotation_clockwise_degrees();
+    const auto rotated_line = working_line.rotate(rotation);
+    auto moving_decomp = safe_partition(moving_polygon);
+    auto fixed_decomp = safe_partition(fixed_polygon);
+    if (moving_decomp.empty() || fixed_decomp.empty()) {
         return detail::overlap_along_line_polygon_partition_bruteforce(moving_polygon, fixed_polygon, line);
     }
-    return events_along_line_merged(mr, fr, line);
+    for (auto& r : moving_decomp) r = r.rotate(rotation);
+    for (auto& r : fixed_decomp) r = r.rotate(rotation);
+    int smallest_x = moving_decomp[0].a.x;
+    for (const auto& r : moving_decomp) {
+        smallest_x = std::min(smallest_x, r.a.x);
+    }
+    EventList events;
+    for (const auto& moving_rect : moving_decomp) {
+        const int offset = moving_rect.a.x - smallest_x;
+        auto new_events = overlap_along_line_rect_rects(moving_rect, fixed_decomp, rotated_line, offset);
+        events = merge_events(std::move(events), std::move(new_events), rotated_line);
+    }
+    if (reverse) {
+        events = reverse_events(events, rotated_line);
+    }
+    for (auto& ev : events) {
+        ev.first = ev.first.rotate_around_center(-rotation);
+    }
+    return events;
 }
 
 } // namespace edgar::geometry

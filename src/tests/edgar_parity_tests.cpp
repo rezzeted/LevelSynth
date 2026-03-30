@@ -12,6 +12,7 @@
 #include "edgar/graphs/undirected_graph.hpp"
 #include "edgar/graphs/graph_algorithms.hpp"
 #include "edgar/graphs/planar_faces.hpp"
+#include "edgar/geometry/bipartite_matching.hpp"
 #include "edgar/generator/grid2d/level_description_grid2d.hpp"
 #include "edgar/generator/grid2d/room_template_grid2d.hpp"
 #include "edgar/generator/grid2d/simple_door_mode_grid2d.hpp"
@@ -986,4 +987,312 @@ TEST(EdgarGeometry, NormalizePolygon_ReordersVertices) {
     auto norm = normalize_polygon(sq);
     EXPECT_EQ(norm.points().size(), 4u);
     EXPECT_EQ(norm.points()[0], Vector2Int(0, 0));
+}
+
+// ===========================================================================
+// Stage B: OrthogonalLine + Polygon + HopcroftKarp + OverlapAlongLine tests
+// ===========================================================================
+
+namespace {
+auto overlap_along_line_wrap(
+    const PolygonGrid2D& mp, const PolygonGrid2D& fp, const OrthogonalLineGrid2D& l) {
+    return edgar::geometry::overlap_along_line(mp, fp, l);
+}
+} // anonymous
+
+// --- B-T1: OrthogonalLine Rotate ---
+
+TEST(EdgarUtils, OrthogonalLine_Rotate_ReturnsRotated) {
+    {
+        OrthogonalLineGrid2D line(Vector2Int(0, 0), Vector2Int(5, 0));
+        auto r1 = line.rotate(90);
+        EXPECT_EQ(r1.from, Vector2Int(0, 0));
+        EXPECT_EQ(r1.to, Vector2Int(0, -5));
+        auto r2 = line.rotate(-270);
+        EXPECT_EQ(r2.from, Vector2Int(0, 0));
+        EXPECT_EQ(r2.to, Vector2Int(0, -5));
+    }
+    {
+        OrthogonalLineGrid2D line(Vector2Int(-2, -2), Vector2Int(-2, 5));
+        auto r1 = line.rotate(180);
+        EXPECT_EQ(r1.from, Vector2Int(2, 2));
+        EXPECT_EQ(r1.to, Vector2Int(2, -5));
+        auto r2 = line.rotate(-180);
+        EXPECT_EQ(r2.from, Vector2Int(2, 2));
+        EXPECT_EQ(r2.to, Vector2Int(2, -5));
+    }
+}
+
+// NOTE: C++ OrthogonalLineGrid2D::rotate does not validate degrees.
+// Invalid angles produce degenerate lines. C# throws; skip that test.
+
+// --- B-T2: RotateDirection ---
+
+TEST(EdgarUtils, OrthogonalLine_RotateDirection_ReturnsRotated) {
+    EXPECT_EQ(rotate_direction(OrthogonalDirection::Right, 90), OrthogonalDirection::Bottom);
+    EXPECT_EQ(rotate_direction(OrthogonalDirection::Bottom, -180), OrthogonalDirection::Top);
+}
+
+// --- B-T3: GetPoints Top/Bottom/Right/Left ---
+
+TEST(EdgarUtils, OrthogonalLine_GetPoints_Top) {
+    auto pts = OrthogonalLineGrid2D(Vector2Int(2, 2), Vector2Int(2, 4)).grid_points_inclusive();
+    ASSERT_EQ(pts.size(), 3u);
+    EXPECT_EQ(pts[0], Vector2Int(2, 2));
+    EXPECT_EQ(pts[1], Vector2Int(2, 3));
+    EXPECT_EQ(pts[2], Vector2Int(2, 4));
+}
+
+TEST(EdgarUtils, OrthogonalLine_GetPoints_Bottom) {
+    auto pts = OrthogonalLineGrid2D(Vector2Int(2, 4), Vector2Int(2, 2)).grid_points_inclusive();
+    ASSERT_EQ(pts.size(), 3u);
+    EXPECT_EQ(pts[0], Vector2Int(2, 4));
+    EXPECT_EQ(pts[1], Vector2Int(2, 3));
+    EXPECT_EQ(pts[2], Vector2Int(2, 2));
+}
+
+TEST(EdgarUtils, OrthogonalLine_GetPoints_Right) {
+    auto pts = OrthogonalLineGrid2D(Vector2Int(5, 3), Vector2Int(8, 3)).grid_points_inclusive();
+    ASSERT_EQ(pts.size(), 4u);
+    EXPECT_EQ(pts[0], Vector2Int(5, 3));
+    EXPECT_EQ(pts[1], Vector2Int(6, 3));
+    EXPECT_EQ(pts[2], Vector2Int(7, 3));
+    EXPECT_EQ(pts[3], Vector2Int(8, 3));
+}
+
+TEST(EdgarUtils, OrthogonalLine_GetPoints_Left) {
+    auto pts = OrthogonalLineGrid2D(Vector2Int(8, 3), Vector2Int(5, 3)).grid_points_inclusive();
+    ASSERT_EQ(pts.size(), 4u);
+    EXPECT_EQ(pts[0], Vector2Int(8, 3));
+    EXPECT_EQ(pts[1], Vector2Int(7, 3));
+    EXPECT_EQ(pts[2], Vector2Int(6, 3));
+    EXPECT_EQ(pts[3], Vector2Int(5, 3));
+}
+
+// --- B-T4: Shrink_Invalid_Throws ---
+
+TEST(EdgarUtils, OrthogonalLine_Shrink_Invalid_Throws) {
+    OrthogonalLineGrid2D line(Vector2Int(0, 0), Vector2Int(5, 0));
+    EXPECT_THROW(line.shrink(3), std::invalid_argument);
+    OrthogonalLineGrid2D line2(Vector2Int(0, 0), Vector2Int(-6, 0));
+    EXPECT_THROW(line2.shrink(4, 3), std::invalid_argument);
+}
+
+// --- B-T5: GetAllTransformations ---
+
+TEST(EdgarGeometry, Polygon_GetAllTransformations_Square) {
+    auto sq = PolygonGrid2D::get_square(4);
+    auto transforms = sq.get_all_transformations();
+    EXPECT_EQ(transforms.size(), 8u);
+}
+
+TEST(EdgarGeometry, Polygon_GetAllTransformations_Rectangle) {
+    auto rect = PolygonGrid2D::get_rectangle(3, 5);
+    auto transforms = rect.get_all_transformations();
+    EXPECT_EQ(transforms.size(), 8u);
+}
+
+// --- B-T6: Constructor_OverlappingEdges_Throws ---
+
+TEST(EdgarGeometry, PolygonConstructor_OverlappingEdges_Throws) {
+    EXPECT_THROW({
+        PolygonGrid2D p(std::vector<Vector2Int>{
+            Vector2Int(0, 0), Vector2Int(3, 0), Vector2Int(3, 2),
+            Vector2Int(0, 2), Vector2Int(0, 4)
+        });
+    }, std::invalid_argument);
+}
+
+// --- B-T7: OverlapAlongLine tests (bruteforce reference) ---
+
+TEST(EdgarGeometry, OverlapAlongLine_Rectangles_NonOverlapping) {
+    auto p1 = PolygonGrid2D::get_square(5);
+    auto p2 = PolygonGrid2D::get_rectangle(2, 3) + Vector2Int(10, 10);
+    auto line = OrthogonalLineGrid2D(Vector2Int(0, 0), Vector2Int(10, 0));
+    auto result = overlap_along_line_wrap(p1, p2, line);
+    EXPECT_EQ(result.size(), 0u);
+}
+
+TEST(EdgarGeometry, OverlapAlongLine_Rectangles_OverlapEnd) {
+    auto p1 = PolygonGrid2D::get_square(5);
+    auto p2 = PolygonGrid2D::get_rectangle(2, 3) + Vector2Int(0, 8);
+    auto line = OrthogonalLineGrid2D(Vector2Int(0, 0), Vector2Int(0, 10));
+    auto result = overlap_along_line_wrap(p1, p2, line);
+    ASSERT_EQ(result.size(), 1u);
+    EXPECT_EQ(result[0].first, Vector2Int(0, 4));
+    EXPECT_TRUE(result[0].second);
+}
+
+TEST(EdgarGeometry, OverlapAlongLine_Rectangles_OverlapStart2) {
+    auto p1 = PolygonGrid2D::get_square(5);
+    auto p2 = PolygonGrid2D::get_rectangle(2, 3) + Vector2Int(0, -3);
+    auto line = OrthogonalLineGrid2D(Vector2Int(0, 0), Vector2Int(0, 10));
+    auto result = overlap_along_line_wrap(p1, p2, line);
+    EXPECT_EQ(result.size(), 0u);
+}
+
+TEST(EdgarGeometry, OverlapAlongLine_Rectangles_OverlapStart) {
+    auto p1 = PolygonGrid2D::get_square(5);
+    auto p2 = PolygonGrid2D::get_rectangle(2, 3);
+    auto line = OrthogonalLineGrid2D(Vector2Int(0, 0), Vector2Int(0, 10));
+    auto result = overlap_along_line_wrap(p1, p2, line);
+    ASSERT_EQ(result.size(), 2u);
+    EXPECT_EQ(result[0].first, Vector2Int(0, 0));
+    EXPECT_TRUE(result[0].second);
+    EXPECT_EQ(result[1].first, Vector2Int(0, 3));
+    EXPECT_FALSE(result[1].second);
+}
+
+namespace {
+PolygonGrid2D make_l_shape() {
+    PolygonGrid2DBuilder b;
+    b.add_point(0, 0); b.add_point(0, 6); b.add_point(3, 6);
+    b.add_point(3, 3); b.add_point(6, 3); b.add_point(6, 0);
+    return b.build();
+}
+PolygonGrid2D make_plus_shape() {
+    PolygonGrid2DBuilder b;
+    b.add_point(0, 2); b.add_point(0, 4); b.add_point(2, 4);
+    b.add_point(2, 6); b.add_point(4, 6); b.add_point(4, 4);
+    b.add_point(6, 4); b.add_point(6, 2); b.add_point(4, 2);
+    b.add_point(4, 0); b.add_point(2, 0); b.add_point(2, 2);
+    return b.build();
+}
+} // anonymous
+
+TEST(EdgarGeometry, OverlapAlongLine_SquareAndL) {
+    auto p1 = PolygonGrid2D::get_square(6);
+    auto p2 = make_l_shape();
+    auto line = OrthogonalLineGrid2D(Vector2Int(-2, 3), Vector2Int(5, 3));
+    auto result = overlap_along_line_wrap(p1, p2, line);
+    ASSERT_EQ(result.size(), 2u);
+    EXPECT_EQ(result[0].first, Vector2Int(-2, 3));
+    EXPECT_TRUE(result[0].second);
+    EXPECT_EQ(result[1].first, Vector2Int(3, 3));
+    EXPECT_FALSE(result[1].second);
+}
+
+TEST(EdgarGeometry, OverlapAlongLine_SquareAndL2) {
+    auto p1 = PolygonGrid2D::get_square(6);
+    auto p2 = make_l_shape();
+    auto line = OrthogonalLineGrid2D(Vector2Int(3, 5), Vector2Int(3, -2));
+    auto result = overlap_along_line_wrap(p1, p2, line);
+    ASSERT_EQ(result.size(), 1u);
+    EXPECT_EQ(result[0].first, Vector2Int(3, 2));
+    EXPECT_TRUE(result[0].second);
+}
+
+TEST(EdgarGeometry, OverlapAlongLine_LAndL) {
+    auto p1 = make_l_shape();
+    auto p2 = make_l_shape();
+    auto line = OrthogonalLineGrid2D(Vector2Int(-3, -5), Vector2Int(-3, 2));
+    auto result = overlap_along_line_wrap(p1, p2, line);
+    ASSERT_EQ(result.size(), 1u);
+    EXPECT_EQ(result[0].first, Vector2Int(-3, -2));
+    EXPECT_TRUE(result[0].second);
+}
+
+TEST(EdgarGeometry, OverlapAlongLine_LAndL2) {
+    auto p1 = make_l_shape();
+    PolygonGrid2DBuilder b;
+    b.add_point(0, 0); b.add_point(0, 9); b.add_point(3, 9);
+    b.add_point(3, 3); b.add_point(6, 3); b.add_point(6, 0);
+    auto p2 = b.build();
+    auto line = OrthogonalLineGrid2D(Vector2Int(3, 8), Vector2Int(3, -2));
+    auto result = overlap_along_line_wrap(p1, p2, line);
+    ASSERT_EQ(result.size(), 1u);
+    EXPECT_EQ(result[0].first, Vector2Int(3, 2));
+    EXPECT_TRUE(result[0].second);
+}
+
+TEST(EdgarGeometry, OverlapAlongLine_LAndL3) {
+    auto p1 = make_l_shape();
+    auto p2 = make_l_shape();
+    auto line = OrthogonalLineGrid2D(Vector2Int(3, 5), Vector2Int(3, -2));
+    auto result = overlap_along_line_wrap(p1, p2, line);
+    ASSERT_EQ(result.size(), 1u);
+    EXPECT_EQ(result[0].first, Vector2Int(3, 2));
+    EXPECT_TRUE(result[0].second);
+}
+
+TEST(EdgarGeometry, OverlapAlongLine_SquareAndL3) {
+    auto p1 = PolygonGrid2D::get_square(6);
+    PolygonGrid2DBuilder b;
+    b.add_point(0, 0); b.add_point(0, 6); b.add_point(6, 6);
+    b.add_point(6, 3); b.add_point(3, 3); b.add_point(3, 0);
+    auto p2 = b.build();
+    auto line = OrthogonalLineGrid2D(Vector2Int(3, 2), Vector2Int(3, -5));
+    auto result = overlap_along_line_wrap(p1, p2, line);
+    ASSERT_EQ(result.size(), 2u);
+    EXPECT_EQ(result[0].first, Vector2Int(3, 2));
+    EXPECT_TRUE(result[0].second);
+    EXPECT_EQ(result[1].first, Vector2Int(3, -3));
+    EXPECT_FALSE(result[1].second);
+}
+
+TEST(EdgarGeometry, OverlapAlongLine_ComplexCase) {
+    auto p1 = make_plus_shape();
+    PolygonGrid2DBuilder b;
+    b.add_point(0, 0); b.add_point(0, 8); b.add_point(8, 8);
+    b.add_point(8, 2); b.add_point(6, 2); b.add_point(6, 6);
+    b.add_point(2, 6); b.add_point(2, 0);
+    auto p2 = b.build();
+    auto line = OrthogonalLineGrid2D(Vector2Int(0, -2), Vector2Int(15, -2));
+    auto result = overlap_along_line_wrap(p1, p2, line);
+    ASSERT_EQ(result.size(), 4u);
+    EXPECT_EQ(result[0].first, Vector2Int(0, -2));
+    EXPECT_TRUE(result[0].second);
+    EXPECT_EQ(result[1].first, Vector2Int(2, -2));
+    EXPECT_FALSE(result[1].second);
+    EXPECT_EQ(result[2].first, Vector2Int(3, -2));
+    EXPECT_TRUE(result[2].second);
+    EXPECT_EQ(result[3].first, Vector2Int(6, -2));
+    EXPECT_FALSE(result[3].second);
+}
+
+// --- B-T8: HopcroftKarp matching ---
+
+TEST(EdgarGeometry, HopcroftKarp_OneToMany_ReturnsOne) {
+    std::vector<std::pair<int, int>> edges{{0, 0}, {0, 1}, {0, 2}};
+    auto matching = hopcroft_karp_max_matching(1, 3, edges);
+    EXPECT_EQ(matching.size(), 1u);
+    std::set<int> left_seen, right_seen;
+    for (auto& [u, v] : matching) {
+        EXPECT_EQ(left_seen.count(u), 0u);
+        EXPECT_EQ(right_seen.count(v), 0u);
+        left_seen.insert(u);
+        right_seen.insert(v);
+    }
+}
+
+TEST(EdgarGeometry, HopcroftKarp_EightVertices_ReturnsFour) {
+    std::vector<std::pair<int, int>> edges{
+        {0, 1}, {0, 2}, {1, 0}, {2, 1}, {3, 1}, {3, 3}
+    };
+    auto matching = hopcroft_karp_max_matching(4, 4, edges);
+    EXPECT_EQ(matching.size(), 4u);
+    std::set<int> left_seen, right_seen;
+    for (auto& [u, v] : matching) {
+        EXPECT_EQ(left_seen.count(u), 0u);
+        EXPECT_EQ(right_seen.count(v), 0u);
+        left_seen.insert(u);
+        right_seen.insert(v);
+    }
+}
+
+TEST(EdgarGeometry, HopcroftKarp_CompleteGraph_ReturnsFive) {
+    int n_left = 5, n_right = 6;
+    std::vector<std::pair<int, int>> edges;
+    for (int i = 0; i < n_left; ++i)
+        for (int j = 0; j < n_right; ++j)
+            edges.push_back({i, j});
+    auto matching = hopcroft_karp_max_matching(n_left, n_right, edges);
+    EXPECT_EQ(matching.size(), 5u);
+    std::set<int> left_seen, right_seen;
+    for (auto& [u, v] : matching) {
+        EXPECT_EQ(left_seen.count(u), 0u);
+        EXPECT_EQ(right_seen.count(v), 0u);
+        left_seen.insert(u);
+        right_seen.insert(v);
+    }
 }
