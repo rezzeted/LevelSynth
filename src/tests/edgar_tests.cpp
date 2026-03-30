@@ -1109,6 +1109,36 @@ TEST(EdgardDoors, ComputeLayoutDoors_populatesDoorsForConnectedRooms) {
     }
 }
 
+TEST(EdgarGenerator, ManualDoorMode_smallGraphLayout) {
+    using namespace edgar;
+    using namespace edgar::generator::grid2d;
+
+    auto manual_square = RoomTemplateGrid2D(
+        edgar::geometry::PolygonGrid2D::get_square(8),
+        std::make_shared<ManualDoorModeGrid2D>(std::vector<DoorGrid2D>{
+            DoorGrid2D{.from = {0, 1}, .to = {0, 2}},
+            DoorGrid2D{.from = {8, 1}, .to = {8, 2}},
+            DoorGrid2D{.from = {1, 0}, .to = {2, 0}},
+            DoorGrid2D{.from = {1, 8}, .to = {2, 8}},
+        }));
+    RoomDescriptionGrid2D room_desc(false, {manual_square});
+
+    LevelDescriptionGrid2D<int> level;
+    level.add_room(0, room_desc);
+    level.add_room(1, room_desc);
+    level.add_connection(0, 1);
+
+    GraphBasedGeneratorGrid2D<int> generator(level);
+    std::mt19937 rng(1337);
+    generator.inject_random_generator(std::move(rng));
+    auto layout = generator.generate_layout();
+
+    ASSERT_EQ(layout.rooms.size(), 2u);
+    EXPECT_FALSE(edgar::geometry::polygons_overlap_area(
+        layout.rooms[0].outline, layout.rooms[0].position,
+        layout.rooms[1].outline, layout.rooms[1].position));
+}
+
 TEST(EdgarGenerator, SixRoomStarGraph_noOverlap) {
     using namespace edgar;
     using namespace edgar::generator::grid2d;

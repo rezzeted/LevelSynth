@@ -15,8 +15,8 @@ public:
         if (corner_distance < 0) {
             throw std::invalid_argument("corner_distance must be non-negative");
         }
-        if (door_length <= 0) {
-            throw std::invalid_argument("door_length must be positive");
+        if (door_length < 0) {
+            throw std::invalid_argument("door_length must be non-negative");
         }
     }
 

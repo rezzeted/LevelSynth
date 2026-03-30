@@ -10,6 +10,21 @@
 
 namespace edgar::generator::grid2d {
 
+static int rotation_for_direction(geometry::OrthogonalDirection direction) {
+    switch (direction) {
+    case geometry::OrthogonalDirection::Right:
+        return 0;
+    case geometry::OrthogonalDirection::Bottom:
+        return 270;
+    case geometry::OrthogonalDirection::Left:
+        return 180;
+    case geometry::OrthogonalDirection::Top:
+        return 90;
+    default:
+        throw std::invalid_argument("ConfigurationSpacesGenerator: undefined door direction");
+    }
+}
+
 ConfigurationSpaceGrid2D ConfigurationSpacesGenerator::get_configuration_space(
     const geometry::PolygonGrid2D& polygon, const std::vector<DoorLineGrid2D>& door_lines,
     const geometry::PolygonGrid2D& fixed_center, const std::vector<DoorLineGrid2D>& door_lines_fixed,
@@ -26,17 +41,17 @@ ConfigurationSpaceGrid2D ConfigurationSpacesGenerator::get_configuration_space(
 
     std::array<std::vector<DoorLineGrid2D>, 5> lines_by_dir{};
     for (const auto& d : door_lines_f) {
-        lines_by_dir[static_cast<int>(d.line.get_direction())].push_back(d);
+        lines_by_dir[static_cast<int>(d.get_direction())].push_back(d);
     }
 
     for (const auto& door_line : door_lines_m) {
         const geometry::OrthogonalLineGrid2D& line = door_line.line;
-        const geometry::OrthogonalDirection opposite_direction = geometry::opposite_direction(line.get_direction());
-        const int rotation = line.compute_rotation_clockwise_degrees();
+        const geometry::OrthogonalDirection opposite_direction = geometry::opposite_direction(door_line.get_direction());
+        const int rotation = rotation_for_direction(door_line.get_direction());
         const geometry::OrthogonalLineGrid2D rotated_line = line.rotate(rotation);
 
         for (const auto& c_door_line_fixed : lines_by_dir[static_cast<int>(opposite_direction)]) {
-            if (c_door_line_fixed.length != door_line.length) {
+            if (c_door_line_fixed.length != door_line.length || c_door_line_fixed.socket != door_line.socket) {
                 continue;
             }
             const geometry::OrthogonalLineGrid2D cline = c_door_line_fixed.line.rotate(rotation);
@@ -52,7 +67,11 @@ ConfigurationSpaceGrid2D ConfigurationSpacesGenerator::get_configuration_space(
                 geometry::OrthogonalLineGrid2D result_line(from, to);
                 result_line = result_line.rotate(-rotation);
                 reverse_door.emplace_back(result_line,
-                    DoorLineGrid2D{.line = cline.rotate(-rotation), .length = c_door_line_fixed.length});
+                    DoorLineGrid2D{
+                        .line = cline.rotate(-rotation),
+                        .length = c_door_line_fixed.length,
+                        .direction = c_door_line_fixed.get_direction(),
+                        .socket = c_door_line_fixed.socket});
                 configuration_space_lines.push_back(result_line);
             } else {
                 for (int offset : *offsets) {
@@ -60,7 +79,11 @@ ConfigurationSpaceGrid2D ConfigurationSpacesGenerator::get_configuration_space(
                     geometry::OrthogonalLineGrid2D result_line(from - offset_vector, to - offset_vector);
                     result_line = result_line.rotate(-rotation);
                     reverse_door.emplace_back(result_line,
-                        DoorLineGrid2D{.line = cline.rotate(-rotation), .length = c_door_line_fixed.length});
+                        DoorLineGrid2D{
+                            .line = cline.rotate(-rotation),
+                            .length = c_door_line_fixed.length,
+                            .direction = c_door_line_fixed.get_direction(),
+                            .socket = c_door_line_fixed.socket});
                     configuration_space_lines.push_back(result_line);
                 }
             }
@@ -87,7 +110,7 @@ ConfigurationSpaceGrid2D ConfigurationSpacesGenerator::get_configuration_space_o
 
     for (const auto& corridor_position_line : fixed_and_corridor_cs.lines) {
         for (const auto& corridor_door_line : merged_corridor_doors) {
-            const int rotation = corridor_door_line.line.compute_rotation_clockwise_degrees();
+            const int rotation = rotation_for_direction(corridor_door_line.get_direction());
             const geometry::OrthogonalLineGrid2D rotated_line = corridor_door_line.line.rotate(rotation);
             const geometry::OrthogonalLineGrid2D rotated_corridor_line =
                 corridor_position_line.rotate(rotation).normalized();
@@ -103,12 +126,19 @@ ConfigurationSpaceGrid2D ConfigurationSpacesGenerator::get_configuration_space_o
                 };
                 const geometry::OrthogonalLineGrid2D correct_length_line(correct_position_line.from, to_ext);
                 new_corridor_door_lines.push_back(
-                    DoorLineGrid2D{.line = correct_length_line.rotate(-rotation), .length = corridor_door_line.length});
+                    DoorLineGrid2D{
+                        .line = correct_length_line.rotate(-rotation),
+                        .length = corridor_door_line.length,
+                        .direction = corridor_door_line.get_direction(),
+                        .socket = corridor_door_line.socket});
             } else if (rotated_corridor_line.get_direction() == geometry::OrthogonalDirection::Top) {
                 for (const auto& corridor_position : rotated_corridor_line.grid_points_inclusive()) {
                     const geometry::OrthogonalLineGrid2D transformed_door_line = rotated_line + corridor_position;
                     new_corridor_door_lines.push_back(DoorLineGrid2D{
-                        .line = transformed_door_line.rotate(-rotation), .length = corridor_door_line.length});
+                        .line = transformed_door_line.rotate(-rotation),
+                        .length = corridor_door_line.length,
+                        .direction = corridor_door_line.get_direction(),
+                        .socket = corridor_door_line.socket});
                 }
             }
         }

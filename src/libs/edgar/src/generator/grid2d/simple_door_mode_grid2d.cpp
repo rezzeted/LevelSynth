@@ -12,7 +12,10 @@ std::vector<DoorLineGrid2D> SimpleDoorModeGrid2D::get_doors(const geometry::Poly
         }
         const geometry::OrthogonalLineGrid2D socket_line =
             line.shrink(corner_distance_, corner_distance_ + door_length_);
-        doors.push_back(DoorLineGrid2D{socket_line, door_length_});
+        doors.push_back(DoorLineGrid2D{
+            .line = socket_line,
+            .length = door_length_,
+            .direction = line.get_direction()});
     }
     return doors;
 }

@@ -46,6 +46,7 @@ add_library(edgar STATIC
     src/generator/grid2d/simulated_annealing_evolver_grid2d.cpp
     src/generator/grid2d/room_template_grid2d.cpp
     src/generator/grid2d/simple_door_mode_grid2d.cpp
+    src/generator/grid2d/manual_door_mode_grid2d.cpp
     src/io/dungeon_drawer.cpp
     src/io/png_rgba.cpp
 )

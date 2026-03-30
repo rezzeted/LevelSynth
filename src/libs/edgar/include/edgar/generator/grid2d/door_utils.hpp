@@ -12,10 +12,25 @@
 
 namespace edgar::generator::grid2d {
 
+inline geometry::Vector2Int direction_unit(geometry::OrthogonalDirection direction) {
+    switch (direction) {
+    case geometry::OrthogonalDirection::Top:
+        return {0, 1};
+    case geometry::OrthogonalDirection::Right:
+        return {1, 0};
+    case geometry::OrthogonalDirection::Bottom:
+        return {0, -1};
+    case geometry::OrthogonalDirection::Left:
+        return {-1, 0};
+    default:
+        throw std::invalid_argument("merge_door_lines: undefined door direction");
+    }
+}
+
 inline std::vector<DoorLineGrid2D> merge_door_lines(std::vector<DoorLineGrid2D> door_lines) {
     std::map<geometry::OrthogonalDirection, std::vector<DoorLineGrid2D>> by_dir;
     for (auto& d : door_lines) {
-        by_dir[d.line.get_direction()].push_back(std::move(d));
+        by_dir[d.get_direction()].push_back(std::move(d));
     }
 
     std::vector<DoorLineGrid2D> result;
@@ -32,11 +47,11 @@ inline std::vector<DoorLineGrid2D> merge_door_lines(std::vector<DoorLineGrid2D> 
             while (found) {
                 found = false;
                 for (auto it = same.begin(); it != same.end();) {
-                    if (it->length != door_line.length) {
+                    if (it->length != door_line.length || it->socket != door_line.socket) {
                         ++it;
                         continue;
                     }
-                    const geometry::Vector2Int dv = door_line.line.direction_vector();
+                    const geometry::Vector2Int dv = direction_unit(door_line.get_direction());
                     if (door_line.line.to + dv == it->line.from) {
                         door_line.line = geometry::OrthogonalLineGrid2D(door_line.line.from, it->line.to);
                         it = same.erase(it);

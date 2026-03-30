@@ -48,7 +48,7 @@
 
 ### 3.3 Отсутствует в порте (ядро)
 
-- **Двери:** кроме `SimpleDoorModeGrid2D` и утилит слияния линий — нет режимов уровня C# `DoorHandler` (overlap, specific positions, manual и т.д. по тестам `Edgar.Tests/Core/Doors`).
+- **Двери:** в порте теперь есть `SimpleDoorModeGrid2D` (overlap), `ManualDoorModeGrid2D` (specific positions/manual), прокладка door mode из YAML-пресетов (`SpecificPositionsMode`) и учёт door socket в merge/КП. При этом отсутствует отдельный runtime-реестр обработчиков уровня `DoorHandler` из Legacy-слоя C# (для текущего Grid2D-пайплайна это не блокер).
 - **Legacy-утилиты:** статистика (`EntropyCalculator`), meta-optimization, evolution sandbox, отдельный `DungeonGenerator` / platformers — **не перенесены**.
 - **Структуры GeneralAlgorithms:** например `SimpleBitVector32`, полные alias-словари — **нет** в портовом дереве.
 

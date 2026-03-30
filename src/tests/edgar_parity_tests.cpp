@@ -15,6 +15,7 @@
 #include "edgar/geometry/bipartite_matching.hpp"
 #include "edgar/generator/grid2d/level_description_grid2d.hpp"
 #include "edgar/generator/grid2d/room_template_grid2d.hpp"
+#include "edgar/generator/grid2d/manual_door_mode_grid2d.hpp"
 #include "edgar/generator/grid2d/simple_door_mode_grid2d.hpp"
 #include "edgar/generator/grid2d/door_utils.hpp"
 #include "edgar/generator/grid2d/configuration_spaces_generator.hpp"
@@ -472,7 +473,8 @@ static std::vector<DoorLineGrid2D> sorted_by_from(const std::vector<DoorLineGrid
     auto copy = doors;
     std::sort(copy.begin(), copy.end(), [](const DoorLineGrid2D& a, const DoorLineGrid2D& b) {
         if (a.line.from != b.line.from) return a.line.from < b.line.from;
-        return a.line.to < b.line.to;
+        if (a.line.to != b.line.to) return a.line.to < b.line.to;
+        return static_cast<int>(a.get_direction()) < static_cast<int>(b.get_direction());
     });
     return copy;
 }
@@ -551,10 +553,32 @@ TEST(EdgarDoors, SimpleDoorMode_Length2_NoOverlap) {
 }
 
 TEST(EdgarDoors, SimpleDoorMode_InvalidArgs) {
-    EXPECT_THROW(SimpleDoorModeGrid2D(0, 0), std::invalid_argument);
     EXPECT_THROW(SimpleDoorModeGrid2D(-1, 0), std::invalid_argument);
+    EXPECT_THROW(SimpleDoorModeGrid2D(0, -1), std::invalid_argument);
     EXPECT_THROW(SimpleDoorModeGrid2D(1, -1), std::invalid_argument);
+    EXPECT_NO_THROW(SimpleDoorModeGrid2D(0, 0));
     EXPECT_NO_THROW(SimpleDoorModeGrid2D(1, 0));
+}
+
+TEST(EdgarDoors, SimpleDoorMode_LengthZero) {
+    auto polygon = PolygonGrid2D::get_rectangle(3, 5);
+    SimpleDoorModeGrid2D mode(0, 0);
+    auto doors = mode.get_doors(polygon);
+    auto expected = std::vector<DoorLineGrid2D>{
+        {OrthogonalLineGrid2D(Vector2Int(0, 0), Vector2Int(0, 5)), 0},
+        {OrthogonalLineGrid2D(Vector2Int(0, 5), Vector2Int(3, 5)), 0},
+        {OrthogonalLineGrid2D(Vector2Int(3, 5), Vector2Int(3, 0)), 0},
+        {OrthogonalLineGrid2D(Vector2Int(3, 0), Vector2Int(0, 0)), 0},
+    };
+
+    auto actual_sorted = sorted_by_from(doors);
+    auto expected_sorted = sorted_by_from(expected);
+    ASSERT_EQ(actual_sorted.size(), expected_sorted.size());
+    for (size_t i = 0; i < actual_sorted.size(); ++i) {
+        EXPECT_EQ(actual_sorted[i].line.from, expected_sorted[i].line.from);
+        EXPECT_EQ(actual_sorted[i].line.to, expected_sorted[i].line.to);
+        EXPECT_EQ(actual_sorted[i].length, expected_sorted[i].length);
+    }
 }
 
 TEST(EdgarDoors, MergeDoorLines_CorrectlyMerges) {
@@ -583,6 +607,83 @@ TEST(EdgarDoors, MergeDoorLines_CorrectlyMerges) {
         EXPECT_EQ(ms[i].line.to, es[i].line.to) << "at index " << i;
         EXPECT_EQ(ms[i].length, es[i].length) << "at index " << i;
     }
+}
+
+TEST(EdgarDoors, MergeDoorLines_DifferentSocketsDoNotMerge) {
+    auto socket_a = std::make_shared<int>(1);
+    auto socket_b = std::make_shared<int>(2);
+    std::vector<DoorLineGrid2D> input = {
+        DoorLineGrid2D{
+            .line = OrthogonalLineGrid2D(Vector2Int(0, 0), Vector2Int(1, 0)),
+            .length = 1,
+            .socket = socket_a,
+        },
+        DoorLineGrid2D{
+            .line = OrthogonalLineGrid2D(Vector2Int(2, 0), Vector2Int(3, 0)),
+            .length = 1,
+            .socket = socket_b,
+        },
+    };
+
+    auto merged = merge_door_lines(std::move(input));
+    EXPECT_EQ(merged.size(), 2u);
+}
+
+TEST(EdgarDoors, ManualDoorMode_LengthZeroCorners) {
+    auto polygon = PolygonGrid2D::get_rectangle(3, 5);
+    ManualDoorModeGrid2D mode({
+        DoorGrid2D{.from = Vector2Int(0, 0), .to = Vector2Int(0, 0)},
+        DoorGrid2D{.from = Vector2Int(0, 5), .to = Vector2Int(0, 5)},
+        DoorGrid2D{.from = Vector2Int(3, 5), .to = Vector2Int(3, 5)},
+        DoorGrid2D{.from = Vector2Int(3, 0), .to = Vector2Int(3, 0)},
+    });
+    auto doors = mode.get_doors(polygon);
+    auto sorted = sorted_by_from(doors);
+    ASSERT_EQ(sorted.size(), 8u);
+    EXPECT_EQ(sorted.front().line.from, Vector2Int(0, 0));
+    EXPECT_EQ(sorted.back().line.from, Vector2Int(3, 5));
+}
+
+TEST(EdgarDoors, ManualDoorMode_LengthZeroInside) {
+    auto polygon = PolygonGrid2D::get_rectangle(3, 5);
+    ManualDoorModeGrid2D mode({
+        DoorGrid2D{.from = Vector2Int(0, 1), .to = Vector2Int(0, 1)},
+        DoorGrid2D{.from = Vector2Int(1, 5), .to = Vector2Int(1, 5)},
+        DoorGrid2D{.from = Vector2Int(3, 4), .to = Vector2Int(3, 4)},
+        DoorGrid2D{.from = Vector2Int(2, 0), .to = Vector2Int(2, 0)},
+    });
+    auto doors = sorted_by_from(mode.get_doors(polygon));
+    ASSERT_EQ(doors.size(), 4u);
+    EXPECT_EQ(doors[0].line.from, Vector2Int(0, 1));
+    EXPECT_EQ(doors[0].get_direction(), OrthogonalDirection::Top);
+    EXPECT_EQ(doors[1].line.from, Vector2Int(1, 5));
+    EXPECT_EQ(doors[1].get_direction(), OrthogonalDirection::Right);
+    EXPECT_EQ(doors[2].line.from, Vector2Int(2, 0));
+    EXPECT_EQ(doors[2].get_direction(), OrthogonalDirection::Left);
+    EXPECT_EQ(doors[3].line.from, Vector2Int(3, 4));
+    EXPECT_EQ(doors[3].get_direction(), OrthogonalDirection::Bottom);
+}
+
+TEST(EdgarDoors, ConfigurationSpaceBetween_RespectsDoorSocket) {
+    const auto square = PolygonGrid2D::get_square(4);
+    auto socket_a = std::make_shared<int>(1);
+    auto socket_b = std::make_shared<int>(2);
+    const std::vector<DoorLineGrid2D> moving = {
+        DoorLineGrid2D{
+            .line = OrthogonalLineGrid2D(Vector2Int(0, 0), Vector2Int(0, 3)),
+            .length = 1,
+            .socket = socket_a,
+        }
+    };
+    const std::vector<DoorLineGrid2D> fixed = {
+        DoorLineGrid2D{
+            .line = OrthogonalLineGrid2D(Vector2Int(4, 0), Vector2Int(4, 3)),
+            .length = 1,
+            .socket = socket_b,
+        }
+    };
+    const auto cs = ConfigurationSpacesGrid2D::configuration_space_between(square, moving, square, fixed);
+    EXPECT_TRUE(cs.lines.empty());
 }
 
 TEST(EdgarDoors, SimpleDoorMode_Square10_Symmetric) {

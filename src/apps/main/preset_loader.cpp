@@ -254,7 +254,17 @@ static RoomTemplateGrid2D build_room_template(const PresetRoomSet::RoomEntry& en
     std::vector<edgar::geometry::Vector2Int> pts = entry.shape;
     edgar::geometry::PolygonGrid2D poly(pts);
 
-    auto door_mode = std::make_shared<SimpleDoorModeGrid2D>(entry.door_length, entry.corner_distance);
+    std::shared_ptr<IDoorModeGrid2D> door_mode;
+    if (entry.door_mode == "SpecificPositionsMode" && !entry.specific_doors.empty()) {
+        std::vector<DoorGrid2D> doors;
+        doors.reserve(entry.specific_doors.size());
+        for (const auto& [from, to] : entry.specific_doors) {
+            doors.push_back(DoorGrid2D{.from = from, .to = to});
+        }
+        door_mode = std::make_shared<ManualDoorModeGrid2D>(std::move(doors));
+    } else {
+        door_mode = std::make_shared<SimpleDoorModeGrid2D>(entry.door_length, entry.corner_distance);
+    }
     return RoomTemplateGrid2D(std::move(poly), std::move(door_mode), entry.name);
 }
 
