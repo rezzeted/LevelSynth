@@ -63,7 +63,8 @@ cmake --build _build --config Debug
 ├── src/apps/main/
 ├── src/tests/
 ├── resources/edgar_gui/      # копия из референса (см. ниже)
-└── docs/EDGAR_PORT_INVENTORY.md
+└── docs/port_vs_original_gap.md
+    docs/port_parity_roadmap.md
 ```
 
 ### Ресурсы Edgar.GUI (копия из референса)
@@ -110,4 +111,4 @@ robocopy %CD%\_edgar_ref\src\Resources %CD%\resources\edgar_gui /E
 ## Стиль и документация
 
 - Код на **C++20**.
-- Порт Edgar: см. [`docs/EDGAR_PORT_INVENTORY.md`](docs/EDGAR_PORT_INVENTORY.md).
+- Порт Edgar: расхождения с оригиналом — [`docs/port_vs_original_gap.md`](docs/port_vs_original_gap.md); roadmap паритета — [`docs/port_parity_roadmap.md`](docs/port_parity_roadmap.md).
