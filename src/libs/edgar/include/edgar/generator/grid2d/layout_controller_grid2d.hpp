@@ -299,7 +299,9 @@ public:
                                    std::vector<geometry::PolygonGrid2D>& outlines,
                                    std::vector<geometry::Vector2Int>& positions,
                                    std::vector<std::optional<RoomTemplateGrid2D>>& templates,
-                                   std::mt19937& rng, int max_passes_without_progress, int* iterations_out) {
+                                   std::mt19937& rng, int max_passes_without_progress, int* iterations_out,
+                                   const ChainGenerateContext<TRoom>* ctx = nullptr,
+                                   int chain_base_iterations = 0) {
         const int n = static_cast<int>(outlines.size());
         if (n <= 0) {
             return true;
@@ -340,6 +342,13 @@ public:
                     progress = true;
                 }
                 ++sweep_steps;
+                if (ctx && (sweep_steps % 32) == 0 &&
+                    ctx->poll_abort(chain_base_iterations + sweep_steps)) {
+                    if (iterations_out) {
+                        *iterations_out += sweep_steps;
+                    }
+                    return eval_full().is_valid();
+                }
             }
             if (eval_full().is_valid()) {
                 if (iterations_out) {
@@ -365,6 +374,7 @@ public:
                 std::vector<geometry::Vector2Int>& positions,
                 std::vector<std::optional<RoomTemplateGrid2D>>& templates,
                 std::vector<geometry::TransformationGrid2D>& transforms, std::mt19937& rng, int* iterations_out,
+                int chain_base_iterations = 0,
                 const ChainGenerateContext<TRoom>* ctx = nullptr,
                 Grid2DLayoutState<TRoom>* state_for_inner_clone = nullptr,
                 const std::vector<int>* chain_nodes = nullptr,
@@ -505,28 +515,41 @@ public:
         };
 
         auto emit_sa = [&](LayoutYieldEvent ev, const Grid2DLayoutState<TRoom>& st, double pen) {
-            if (!ctx || !ctx->on_layout) {
+            if (!ctx) {
                 return;
             }
             const bool sa_stream = ctx->layout_stream == LayoutStreamMode::OnEachSaTryCompleteChain;
-            if (ev == LayoutYieldEvent::LayoutGenerated && !sa_stream) {
+            if (ev == LayoutYieldEvent::LayoutGenerated && sa_stream &&
+                ctx->max_layout_yields > 0 && inner_layouts_emitted >= ctx->max_layout_yields) {
                 return;
             }
-            if (ev == LayoutYieldEvent::LayoutGenerated) {
-                if (ctx->max_layout_yields > 0 && inner_layouts_emitted >= ctx->max_layout_yields) {
-                    return;
-                }
-                ++inner_layouts_emitted;
-            }
+
+            const int iter_total = chain_base_iterations + iterations + inner_tcc_iters_sum;
             LayoutYieldInfo info;
             info.event_type = ev;
-            info.iterations_total = iterations + inner_tcc_iters_sum;
+            info.iterations_total = iter_total;
             info.energy = pen;
             if (ctx->stats_out) {
                 info.iterations_since_last_event = iterations + inner_tcc_iters_sum - last_event_iterations;
                 info.layouts_generated = ctx->stats_out->layouts_generated;
                 info.chain_number = ctx->stats_out->chain_number;
-                ctx->stats_out->iterations_total = iterations + inner_tcc_iters_sum;
+                ctx->stats_out->iterations_total = iter_total;
+            }
+            if (ctx->on_simulated_annealing_event) {
+                ctx->on_simulated_annealing_event(info);
+            }
+
+            if (ev == LayoutYieldEvent::LayoutGenerated && !sa_stream) {
+                return;
+            }
+            if (!ctx->on_layout) {
+                if (ctx->stats_out && ev == LayoutYieldEvent::StageTwoFailure) {
+                    ctx->stats_out->stage_two_failures++;
+                }
+                return;
+            }
+            if (ev == LayoutYieldEvent::LayoutGenerated) {
+                ++inner_layouts_emitted;
             }
             ctx->on_layout(info, st.to_layout_grid());
             if (ctx->stats_out) {
@@ -540,6 +563,13 @@ public:
         };
 
         for (int i = 0; i < cycles; ++i) {
+            if (ctx && ctx->poll_abort(chain_base_iterations + iterations + inner_tcc_iters_sum)) {
+                if (iterations_out) {
+                    *iterations_out = iterations + inner_tcc_iters_sum;
+                }
+                return;
+            }
+
             if (should_restart(number_of_failures, rng)) {
                 if (state_for_inner_clone) {
                     emit_sa(LayoutYieldEvent::RandomRestart, *state_for_inner_clone, e);
@@ -671,6 +701,9 @@ public:
                 const bool is_valid = (new_overlap <= 0.0);
 
                 if (is_valid) {
+                    if (ctx && ctx->on_partial_valid && state_for_inner_clone) {
+                        ctx->on_partial_valid(state_for_inner_clone->to_layout_grid());
+                    }
                     auto snap = make_snapshot();
                     if (is_different_enough(snap)) {
                         if (state_for_inner_clone) {
@@ -690,8 +723,10 @@ public:
 
                             int tcc_iters = 0;
                             const int tcc_pass = std::min(64, std::max(8, n));
+                            const int tcc_chain_base = chain_base_iterations + iterations + inner_tcc_iters_sum;
                             const bool tcc_ok = corridors_ok && try_complete_chain(
-                                cl, rng, tcc_pass, &tcc_iters);
+                                *cl.level, cl.rmap, cl.ig, cl.outlines, cl.positions, cl.templates, rng, tcc_pass,
+                                &tcc_iters, ctx, tcc_chain_base);
                             inner_tcc_iters_sum += tcc_iters;
                             if (ctx && ctx->stats_out) {
                                 ctx->stats_out->iterations_since_last_event += tcc_iters;
@@ -736,6 +771,9 @@ public:
                     delta_e_avg = (delta_e_avg * static_cast<double>(accepted_solutions - 1) + delta_abs) /
                                   static_cast<double>(accepted_solutions);
                     was_accepted = true;
+                    if (ctx && ctx->on_perturbed && state_for_inner_clone) {
+                        ctx->on_perturbed(state_for_inner_clone->to_layout_grid());
+                    }
                 } else {
                     positions[static_cast<std::size_t>(r)] = old_pos;
                     if (did_shape_perturb) {
@@ -743,6 +781,12 @@ public:
                         templates[static_cast<std::size_t>(r)] = old_tmpl;
                         transforms[static_cast<std::size_t>(r)] = old_tr;
                     }
+                }
+
+                if (ctx && (iterations % 32) == 0 &&
+                    ctx->poll_abort(chain_base_iterations + iterations + inner_tcc_iters_sum)) {
+                    should_stop = true;
+                    break;
                 }
 
                 if (e <= 0.0) {
@@ -783,18 +827,19 @@ public:
 
     template <typename TRoom>
     static bool try_complete_chain(Grid2DLayoutState<TRoom>& state, std::mt19937& rng, int max_passes_without_progress,
-                                   int* iterations_out) {
+                                   int* iterations_out, const ChainGenerateContext<TRoom>* ctx = nullptr,
+                                   int chain_base_iterations = 0) {
         return try_complete_chain(*state.level, state.rmap, state.ig, state.outlines, state.positions, state.templates,
-                                  rng, max_passes_without_progress, iterations_out);
+                                  rng, max_passes_without_progress, iterations_out, ctx, chain_base_iterations);
     }
 
     template <typename TRoom>
     void evolve(Grid2DLayoutState<TRoom>& state, std::mt19937& rng, int* iterations_out,
-                 const ChainGenerateContext<TRoom>* ctx = nullptr,
+                 int chain_base_iterations = 0, const ChainGenerateContext<TRoom>* ctx = nullptr,
                  const std::vector<int>* chain_nodes = nullptr,
                  const RoomShapesHandlerGrid2D<TRoom>* room_shapes_handler = nullptr) {
         evolve(*state.level, state.rmap, state.ig, state.outlines, state.positions, state.templates, state.transforms,
-               rng, iterations_out, ctx, &state, chain_nodes, room_shapes_handler);
+               rng, iterations_out, chain_base_iterations, ctx, &state, chain_nodes, room_shapes_handler);
     }
 
 private:

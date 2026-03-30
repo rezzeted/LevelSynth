@@ -1,5 +1,8 @@
 #include <gtest/gtest.h>
 
+#include <atomic>
+#include <chrono>
+#include <memory>
 #include <random>
 #include <unordered_set>
 
@@ -508,6 +511,199 @@ TEST(EdgarGenerator, FourRoomCycle_stripBackend) {
                                                                layout.rooms[j].outline, layout.rooms[j].position));
         }
     }
+}
+
+TEST(EdgarGenerator, GraphBasedGenerator_earlyStopMaxIterations_chain) {
+    using namespace edgar;
+    using namespace edgar::generator::grid2d;
+
+    auto square = RoomTemplateGrid2D(edgar::geometry::PolygonGrid2D::get_square(8),
+                                     std::make_shared<SimpleDoorModeGrid2D>(1, 1));
+    auto rectangle = RoomTemplateGrid2D(edgar::geometry::PolygonGrid2D::get_rectangle(6, 10),
+                                        std::make_shared<SimpleDoorModeGrid2D>(1, 1));
+    RoomDescriptionGrid2D room_desc(false, {square, rectangle});
+
+    LevelDescriptionGrid2D<int> level;
+    level.add_room(0, room_desc);
+    level.add_room(1, room_desc);
+    level.add_room(2, room_desc);
+    level.add_room(3, room_desc);
+    level.add_connection(0, 1);
+    level.add_connection(0, 3);
+    level.add_connection(1, 2);
+    level.add_connection(2, 3);
+
+    GraphBasedGeneratorConfiguration cfg;
+    cfg.early_stop_max_total_iterations = 40;
+    GraphBasedGeneratorGrid2D<int> generator(level, cfg);
+    std::mt19937 rng(12345);
+    generator.inject_random_generator(std::move(rng));
+    EXPECT_NO_THROW(generator.generate_layout());
+    // SA polls abort every 32 inner steps; allow slack beyond the configured cap.
+    EXPECT_LE(generator.iterations_count(), cfg.early_stop_max_total_iterations.value() + 96);
+}
+
+TEST(EdgarGenerator, GraphBasedGenerator_earlyStopElapsed_mockClock_chain) {
+    using namespace edgar;
+    using namespace edgar::generator::grid2d;
+
+    auto square = RoomTemplateGrid2D(edgar::geometry::PolygonGrid2D::get_square(8),
+                                     std::make_shared<SimpleDoorModeGrid2D>(1, 1));
+    auto rectangle = RoomTemplateGrid2D(edgar::geometry::PolygonGrid2D::get_rectangle(6, 10),
+                                        std::make_shared<SimpleDoorModeGrid2D>(1, 1));
+    RoomDescriptionGrid2D room_desc(false, {square, rectangle});
+
+    LevelDescriptionGrid2D<int> level;
+    level.add_room(0, room_desc);
+    level.add_room(1, room_desc);
+    level.add_room(2, room_desc);
+    level.add_room(3, room_desc);
+    level.add_connection(0, 1);
+    level.add_connection(0, 3);
+    level.add_connection(1, 2);
+    level.add_connection(2, 3);
+
+    const auto base = std::chrono::steady_clock::now();
+    auto ms = std::make_shared<std::atomic<int>>(0);
+
+    GraphBasedGeneratorConfiguration cfg;
+    cfg.early_stop_max_elapsed = std::chrono::milliseconds(5);
+    cfg.steady_clock_now = [base, ms]() {
+        const int k = ms->fetch_add(1, std::memory_order_relaxed);
+        return base + std::chrono::milliseconds(k);
+    };
+
+    GraphBasedGeneratorGrid2D<int> generator(level, cfg);
+    std::mt19937 rng(12345);
+    generator.inject_random_generator(std::move(rng));
+    EXPECT_NO_THROW(generator.generate_layout());
+    EXPECT_GT(generator.time_total_ms(), 0.0);
+}
+
+TEST(EdgarGenerator, GraphBasedGenerator_cooperativeCancel_thenReset) {
+    using namespace edgar;
+    using namespace edgar::generator::grid2d;
+
+    auto square = RoomTemplateGrid2D(edgar::geometry::PolygonGrid2D::get_square(8),
+                                     std::make_shared<SimpleDoorModeGrid2D>(1, 1));
+    auto rectangle = RoomTemplateGrid2D(edgar::geometry::PolygonGrid2D::get_rectangle(6, 10),
+                                        std::make_shared<SimpleDoorModeGrid2D>(1, 1));
+    RoomDescriptionGrid2D room_desc(false, {square, rectangle});
+
+    LevelDescriptionGrid2D<int> level;
+    level.add_room(0, room_desc);
+    level.add_room(1, room_desc);
+    level.add_room(2, room_desc);
+    level.add_room(3, room_desc);
+    level.add_connection(0, 1);
+    level.add_connection(0, 3);
+    level.add_connection(1, 2);
+    level.add_connection(2, 3);
+
+    GraphBasedGeneratorConfiguration cfg;
+    GraphBasedGeneratorGrid2D<int> generator(level, cfg);
+    generator.request_cancel();
+    std::mt19937 rng1(12345);
+    generator.inject_random_generator(std::move(rng1));
+    EXPECT_NO_THROW(static_cast<void>(generator.generate_layout()));
+    EXPECT_EQ(generator.iterations_count(), 0);
+
+    generator.reset_cancellation();
+    std::mt19937 rng2(12345);
+    generator.inject_random_generator(std::move(rng2));
+    const auto layout = generator.generate_layout();
+    ASSERT_EQ(layout.rooms.size(), 4u);
+}
+
+TEST(EdgarGenerator, GraphBasedGenerator_cancelExclusiveWithEarlyStop) {
+    using namespace edgar;
+    using namespace edgar::generator::grid2d;
+
+    auto square = RoomTemplateGrid2D(edgar::geometry::PolygonGrid2D::get_square(8),
+                                     std::make_shared<SimpleDoorModeGrid2D>(1, 1));
+    RoomDescriptionGrid2D room_desc(false, {square});
+
+    LevelDescriptionGrid2D<int> level;
+    level.add_room(0, room_desc);
+    level.add_room(1, room_desc);
+    level.add_connection(0, 1);
+
+    GraphBasedGeneratorConfiguration cfg;
+    cfg.early_stop_max_total_iterations = 1000;
+    GraphBasedGeneratorGrid2D<int> generator(level, cfg);
+    EXPECT_THROW(generator.request_cancel(), std::logic_error);
+}
+
+TEST(EdgarGenerator, GraphBasedGenerator_lifecycleCallbacks_chain) {
+    using namespace edgar;
+    using namespace edgar::generator::grid2d;
+
+    auto square = RoomTemplateGrid2D(edgar::geometry::PolygonGrid2D::get_square(8),
+                                     std::make_shared<SimpleDoorModeGrid2D>(1, 1));
+    auto rectangle = RoomTemplateGrid2D(edgar::geometry::PolygonGrid2D::get_rectangle(6, 10),
+                                        std::make_shared<SimpleDoorModeGrid2D>(1, 1));
+    RoomDescriptionGrid2D room_desc(false, {square, rectangle});
+
+    LevelDescriptionGrid2D<int> level;
+    level.add_room(0, room_desc);
+    level.add_room(1, room_desc);
+    level.add_room(2, room_desc);
+    level.add_room(3, room_desc);
+    level.add_connection(0, 1);
+    level.add_connection(0, 3);
+    level.add_connection(1, 2);
+    level.add_connection(2, 3);
+
+    GraphBasedGeneratorGrid2D<int> generator(level);
+    int sa_events = 0;
+    int partial = 0;
+    int perturbed = 0;
+    int valid = 0;
+    generator.set_on_simulated_annealing_event([&](const LayoutYieldInfo&) { ++sa_events; });
+    generator.set_on_partial_valid([&](const LayoutGrid2D<int>&) { ++partial; });
+    generator.set_on_perturbed([&](const LayoutGrid2D<int>&) { ++perturbed; });
+    generator.set_on_valid([&](const LayoutGrid2D<int>&) { ++valid; });
+    std::mt19937 rng(12345);
+    generator.inject_random_generator(std::move(rng));
+    const auto layout = generator.generate_layout();
+    ASSERT_EQ(layout.rooms.size(), 4u);
+    EXPECT_GE(sa_events, 1);
+    EXPECT_GE(partial, 1);
+    EXPECT_GE(perturbed, 1);
+    EXPECT_EQ(valid, 1);
+}
+
+TEST(EdgarGenerator, GraphBasedGenerator_strip_earlyStopElapsed_partialLayout) {
+    using namespace edgar;
+    using namespace edgar::generator::grid2d;
+
+    auto square = RoomTemplateGrid2D(edgar::geometry::PolygonGrid2D::get_square(8),
+                                     std::make_shared<SimpleDoorModeGrid2D>(1, 1));
+    auto rectangle = RoomTemplateGrid2D(edgar::geometry::PolygonGrid2D::get_rectangle(6, 10),
+                                        std::make_shared<SimpleDoorModeGrid2D>(1, 1));
+    RoomDescriptionGrid2D room_desc(false, {square, rectangle});
+
+    LevelDescriptionGrid2D<int> level;
+    level.add_room(0, room_desc);
+    level.add_room(1, room_desc);
+    level.add_room(2, room_desc);
+    level.add_room(3, room_desc);
+    level.add_connection(0, 1);
+    level.add_connection(0, 3);
+    level.add_connection(1, 2);
+    level.add_connection(2, 3);
+
+    GraphBasedGeneratorConfiguration cfg;
+    cfg.backend = GraphBasedGeneratorBackend::strip_packing;
+    cfg.early_stop_max_elapsed = std::chrono::milliseconds(0);
+    const auto frozen = std::chrono::steady_clock::time_point{};
+    cfg.steady_clock_now = [frozen]() { return frozen; };
+
+    GraphBasedGeneratorGrid2D<int> generator(level, cfg);
+    std::mt19937 rng(12345);
+    generator.inject_random_generator(std::move(rng));
+    const auto layout = generator.generate_layout();
+    EXPECT_LT(layout.rooms.size(), 4u);
 }
 
 TEST(EdgarIo, LoadImageRgba_missingFile) {

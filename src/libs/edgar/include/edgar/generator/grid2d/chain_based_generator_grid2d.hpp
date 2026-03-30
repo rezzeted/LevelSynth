@@ -111,11 +111,29 @@ public:
         };
 
         auto emit = [&](LayoutYieldEvent ev, Grid2DLayoutState<TRoom>& st, double pen) {
-            if (!ctx || !ctx->on_layout) {
+            if (!ctx) {
                 return;
             }
             const bool outer_stream = ctx->layout_stream == LayoutStreamMode::OnEachLayoutGenerated;
             const bool sa_stream = ctx->layout_stream == LayoutStreamMode::OnEachSaTryCompleteChain;
+
+            LayoutYieldInfo info;
+            info.event_type = ev;
+            info.iterations_total = iter_count;
+            info.energy = pen;
+            if (ctx->stats_out) {
+                info.iterations_since_last_event = ctx->stats_out->iterations_since_last_event;
+                info.layouts_generated = ctx->stats_out->layouts_generated;
+                info.chain_number = ctx->stats_out->chain_number;
+            }
+            sync_stats_iterations();
+            if (ctx->on_simulated_annealing_event) {
+                ctx->on_simulated_annealing_event(info);
+            }
+
+            if (!ctx->on_layout) {
+                return;
+            }
             if (!outer_stream && !sa_stream) {
                 return;
             }
@@ -128,16 +146,6 @@ public:
                 }
                 ++yields_emitted;
             }
-            LayoutYieldInfo info;
-            info.event_type = ev;
-            info.iterations_total = iter_count;
-            info.energy = pen;
-            if (ctx->stats_out) {
-                info.iterations_since_last_event = ctx->stats_out->iterations_since_last_event;
-                info.layouts_generated = ctx->stats_out->layouts_generated;
-                info.chain_number = ctx->stats_out->chain_number;
-            }
-            sync_stats_iterations();
             ctx->on_layout(info, st.to_layout_grid());
             if (ctx->stats_out && ev == LayoutYieldEvent::LayoutGenerated) {
                 ctx->stats_out->layouts_generated++;
@@ -148,7 +156,26 @@ public:
         bool success = false;
         double last_penalty = 0.0;
 
+        auto safe_to_layout = [&]() -> LayoutGrid2D<TRoom> {
+            if (n <= 0 || static_cast<int>(state.outlines.size()) != n) {
+                return {};
+            }
+            for (int i = 0; i < n; ++i) {
+                if (!state.templates[static_cast<std::size_t>(i)].has_value()) {
+                    return {};
+                }
+            }
+            return state.to_layout_grid();
+        };
+
         for (int restart = 0; restart < max_layout_restarts; ++restart) {
+            if (ctx && ctx->poll_abort(iter_count)) {
+                sync_stats_iterations();
+                if (ctx->iter_budget_sink) {
+                    ctx->publish_iterations(iter_count);
+                }
+                return Result{safe_to_layout(), iter_count};
+            }
             if (restart > 0) {
                 if (ctx && ctx->stats_out) {
                     ctx->stats_out->number_of_failures++;
@@ -206,6 +233,16 @@ public:
                     bool ok = false;
                     for (int attempt = 0; attempt < 8000; ++attempt) {
                         ++iter_count;
+                        if (ctx && ctx->iter_budget_sink) {
+                            ctx->publish_iterations(iter_count);
+                        }
+                        if (ctx && ctx->poll_abort(iter_count)) {
+                            sync_stats_iterations();
+                            if (ctx->iter_budget_sink) {
+                                ctx->publish_iterations(iter_count);
+                            }
+                            return Result{safe_to_layout(), iter_count};
+                        }
                         if (ctx && ctx->stats_out) {
                             ctx->stats_out->iterations_since_last_event++;
                         }
@@ -263,24 +300,53 @@ public:
 
             if (!use_greedy_tree) {
                 for (const auto& chain : chains) {
+                    if (ctx && ctx->poll_abort(iter_count)) {
+                        sync_stats_iterations();
+                        if (ctx->iter_budget_sink) {
+                            ctx->publish_iterations(iter_count);
+                        }
+                        return Result{safe_to_layout(), iter_count};
+                    }
                     const auto& chain_sa_config = sa_provider ? sa_provider->get(chain.number) : sa_config;
                     LayoutControllerGrid2D controller(chain_sa_config);
                     int sa_iters = 0;
-                    controller.evolve(state, rng, &sa_iters, ctx, &chain.nodes, &room_shapes_handler);
+                    const int sa_base = iter_count;
+                    controller.evolve(state, rng, &sa_iters, sa_base, ctx, &chain.nodes, &room_shapes_handler);
                     iter_count += sa_iters;
+                    if (ctx && ctx->iter_budget_sink) {
+                        ctx->publish_iterations(iter_count);
+                    }
                     if (ctx && ctx->stats_out) {
                         ctx->stats_out->iterations_since_last_event += sa_iters;
                         ctx->stats_out->chain_number = chain.number;
+                    }
+                    if (ctx && ctx->poll_abort(iter_count)) {
+                        sync_stats_iterations();
+                        if (ctx->iter_budget_sink) {
+                            ctx->publish_iterations(iter_count);
+                        }
+                        return Result{safe_to_layout(), iter_count};
                     }
                 }
             }
 
             int tcc_iters = 0;
             const int tcc_pass_limit = std::min(64, std::max(8, n));
-            LayoutControllerGrid2D::try_complete_chain(state, rng, tcc_pass_limit, &tcc_iters);
+            const int tcc_base = iter_count;
+            LayoutControllerGrid2D::try_complete_chain(state, rng, tcc_pass_limit, &tcc_iters, ctx, tcc_base);
             iter_count += tcc_iters;
+            if (ctx && ctx->iter_budget_sink) {
+                ctx->publish_iterations(iter_count);
+            }
             if (ctx && ctx->stats_out) {
                 ctx->stats_out->iterations_since_last_event += tcc_iters;
+            }
+            if (ctx && ctx->poll_abort(iter_count)) {
+                sync_stats_iterations();
+                if (ctx->iter_budget_sink) {
+                    ctx->publish_iterations(iter_count);
+                }
+                return Result{safe_to_layout(), iter_count};
             }
 
             last_penalty = penalty_total(outlines, positions);
@@ -289,6 +355,9 @@ public:
             if (last_penalty <= 0.0) {
                 success = true;
                 emit(LayoutYieldEvent::LayoutGenerated, state, last_penalty);
+                if (ctx && ctx->on_valid) {
+                    ctx->on_valid(state.to_layout_grid());
+                }
                 break;
             }
             if (ctx && ctx->stats_out) {
@@ -303,6 +372,9 @@ public:
             emit(LayoutYieldEvent::OutOfIterations, state, last_penalty);
         }
         sync_stats_iterations();
+        if (ctx && ctx->iter_budget_sink) {
+            ctx->publish_iterations(iter_count);
+        }
 
         LayoutGrid2D<TRoom> layout = state.to_layout_grid();
         return Result{std::move(layout), iter_count};

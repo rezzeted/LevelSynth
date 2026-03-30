@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <algorithm>
 #include <chrono>
 #include <climits>
@@ -55,8 +56,26 @@ void GraphBasedGeneratorGrid2D<TRoom>::inject_random_generator(std::mt19937 rng)
 }
 
 template <typename TRoom>
+void GraphBasedGeneratorGrid2D<TRoom>::request_cancel() {
+    if (early_stop_configured()) {
+        throw std::logic_error(
+            "GraphBasedGeneratorGrid2D::request_cancel: early-stop iteration/time limits are mutually exclusive "
+            "with cancellation (matches C# GraphBasedGeneratorGrid2D.SetCancellationToken).");
+    }
+    cancellation_flag_->store(true, std::memory_order_release);
+}
+
+template <typename TRoom>
+void GraphBasedGeneratorGrid2D<TRoom>::reset_cancellation() {
+    if (!early_stop_configured()) {
+        cancellation_flag_->store(false, std::memory_order_release);
+    }
+}
+
+template <typename TRoom>
 LayoutGrid2D<TRoom> GraphBasedGeneratorGrid2D<TRoom>::generate_layout() {
-    const auto t0 = std::chrono::steady_clock::now();
+    const auto& now_fn = configuration_.steady_clock_now;
+    const auto t0 = now_fn();
     iterations_count_ = 0;
     level_.optimize_corridor_constraints = configuration_.optimize_corridor_constraints;
 
@@ -68,12 +87,26 @@ LayoutGrid2D<TRoom> GraphBasedGeneratorGrid2D<TRoom>::generate_layout() {
         gen_ctx.layout_stream = configuration_.layout_stream_mode;
         gen_ctx.max_layout_yields = configuration_.max_layout_yields;
         gen_ctx.on_layout = layout_yield_callback_;
+        gen_ctx.on_simulated_annealing_event = on_simulated_annealing_event_;
+        gen_ctx.on_valid = on_valid_;
+        gen_ctx.on_partial_valid = on_partial_valid_;
+        gen_ctx.on_perturbed = on_perturbed_;
         gen_ctx.stats_out = &orchestration_stats_;
+        gen_ctx.wall_start = t0;
+        gen_ctx.now_fn = now_fn;
+        gen_ctx.early_stop_max_total_iterations = configuration_.early_stop_max_total_iterations;
+        gen_ctx.early_stop_max_elapsed = configuration_.early_stop_max_elapsed;
+        gen_ctx.iter_budget_sink = &iterations_count_;
+        gen_ctx.cancellation_requested = early_stop_configured() ? nullptr : cancellation_flag_;
+        const common::SAConfigurationProvider* sa_provider = nullptr;
+        if (configuration_.sa_config_provider.has_value()) {
+            sa_provider = &(*configuration_.sa_config_provider);
+        }
         const auto res = ChainBasedGeneratorGrid2D<TRoom>::generate(
             level_, configuration_.simulated_annealing, rng, configuration_.chain_decomposition,
-            configuration_.chain_decomposition_configuration, &gen_ctx);
+            configuration_.chain_decomposition_configuration, &gen_ctx, sa_provider);
         iterations_count_ = res.iterations;
-        const auto t1 = std::chrono::steady_clock::now();
+        const auto t1 = now_fn();
         time_total_ms_ = std::chrono::duration<double, std::milli>(t1 - t0).count();
         if (rng_.has_value()) {
             rng_ = std::move(rng);
@@ -104,6 +137,32 @@ LayoutGrid2D<TRoom> GraphBasedGeneratorGrid2D<TRoom>::generate_layout() {
 
     LayoutGrid2D<TRoom> result;
 
+    auto strip_should_abort = [&]() -> bool {
+        if (configuration_.early_stop_max_total_iterations.has_value() &&
+            iterations_count_ >= configuration_.early_stop_max_total_iterations.value()) {
+            return true;
+        }
+        if (configuration_.early_stop_max_elapsed.has_value()) {
+            const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now_fn() - t0);
+            if (elapsed >= configuration_.early_stop_max_elapsed.value()) {
+                return true;
+            }
+        }
+        if (!early_stop_configured() && cancellation_flag_->load(std::memory_order_acquire)) {
+            return true;
+        }
+        return false;
+    };
+
+    auto finish_strip = [&]() -> LayoutGrid2D<TRoom> {
+        const auto t1 = now_fn();
+        time_total_ms_ = std::chrono::duration<double, std::milli>(t1 - t0).count();
+        if (rng_.has_value()) {
+            rng_ = std::move(rng);
+        }
+        return result;
+    };
+
     for (const auto& room : order) {
         const auto& room_desc = level_.get_room_description(room);
         (void)room_desc;
@@ -116,6 +175,9 @@ LayoutGrid2D<TRoom> GraphBasedGeneratorGrid2D<TRoom>::generate_layout() {
         bool placed_ok = false;
         for (int attempt = 0; attempt < 10000; ++attempt) {
             ++iterations_count_;
+            if (strip_should_abort()) {
+                return finish_strip();
+            }
             const int min_px = detail::min_coord_x(outline);
             const int min_py = detail::min_coord_y(outline);
             const geometry::Vector2Int pos{cursor_x - min_px, -min_py};
@@ -154,12 +216,7 @@ LayoutGrid2D<TRoom> GraphBasedGeneratorGrid2D<TRoom>::generate_layout() {
         }
     }
 
-    const auto t1 = std::chrono::steady_clock::now();
-    time_total_ms_ = std::chrono::duration<double, std::milli>(t1 - t0).count();
-    if (rng_.has_value()) {
-        rng_ = std::move(rng);
-    }
-    return result;
+    return finish_strip();
 }
 
 } // namespace edgar::generator::grid2d

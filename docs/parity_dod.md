@@ -23,4 +23,16 @@
 - Полное покрытие дверных режимов overlap / specific (C# `OverlapModeHandlerTests`) — итерация 4 roadmap.
 - Паритет seed→layout с исполняемым C# — опционально после golden-пайплайна (`test_data/parity/`).
 
+## Итерация 5 — события и жизненный цикл (сопоставление с C#)
+
+| C# (GraphBasedGenerator / evolver) | C++ API |
+|-------------------------------------|---------|
+| `OnSimulatedAnnealingEvent` | `set_on_simulated_annealing_event` + `LayoutYieldInfo`; дублирует по смыслу часть данных stream-колбэка |
+| `OnValid` | `set_on_valid` после валидного полного layout в конце успешного restart |
+| `OnPartialValid` | `set_on_partial_valid` при нулевом overlap в SA до шага Metropolis |
+| `OnPerturbed` | `set_on_perturbed` после принятого perturb (Metropolis accept) |
+| `SetCancellationToken` / ранняя остановка | `request_cancel` / `reset_cancellation` и `early_stop_*` в конфиге (взаимное исключение см. §2 gap) |
+
+Тесты: `GraphBasedGenerator_*` в `edgar_tests.cpp` (см. roadmap итерации 5).
+
 См. также: [test_matrix_iteration0.md](test_matrix_iteration0.md), [port_parity_roadmap.md](port_parity_roadmap.md).

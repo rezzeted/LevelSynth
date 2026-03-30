@@ -83,6 +83,8 @@
 
 ## Итерация 5 — Жизненный цикл API генератора
 
+**Статус:** реализовано в `GraphBasedGeneratorConfiguration` / `GraphBasedGeneratorGrid2D`, `ChainGenerateContext`, `LayoutControllerGrid2D`, strip path; контракт и отличия от C# — §2 в [port_vs_original_gap.md](port_vs_original_gap.md).
+
 - Ранняя остановка (итерации / время), отмена (аналог `CancellationToken`).
 - Выравнивание событий с `GraphBasedGeneratorGrid2D` (`OnValid`, `OnPartialValid`, `OnPerturbed`, `OnSimulatedAnnealingEvent`).
 
@@ -92,6 +94,8 @@
 - **Отмена:** после `cancel()` (или аналога) очередной шаг генерации не выполняется; состояние корректно.
 - **События:** таблица соответствия «тип события C# → callback в C++» покрыта тестами (порядок и минимум один вызов на эталонном уровне).
 - Регрессия: существующие тесты стриминга (`Chain_yieldStream_*`, `RandomRestart_*`) остаются зелёными.
+
+Покрытие в `edgar_tests.cpp`: `GraphBasedGenerator_earlyStopMaxIterations_chain`, `GraphBasedGenerator_earlyStopElapsed_mockClock_chain`, `GraphBasedGenerator_cooperativeCancel_thenReset`, `GraphBasedGenerator_cancelExclusiveWithEarlyStop`, `GraphBasedGenerator_lifecycleCallbacks_chain`, `GraphBasedGenerator_strip_earlyStopElapsed_partialLayout`.
 
 *См. «2. Архитектура» в [port_vs_original_gap.md](port_vs_original_gap.md).*
 
