@@ -25,7 +25,7 @@
 
 Много интерфейсов, инъекция `Random` в несколько компонентов, **early stopping** и **CancellationToken**, события генератора (`OnValid`, `OnPerturbed`, и т.д.).
 
-**Порт** консолидирует основной поток в `src/libs/edgar/include/edgar/generator/grid2d/`: `ChainBasedGeneratorGrid2D`, `LayoutControllerGrid2D`, сводный `ConstraintsEvaluatorGrid2D`. Отдельных **плагинов** констрейнтов как в C# нет — штрафы считаются в одном месте. **Отмены** и **ранней остановки по времени/итерациям** в том виде, что в C#, в порте **нет**. Отдельного **`RoomShapesHandler`** и полного слоя **alias** шаблонов (`IntAlias`, `TwoWayDictionary`) как в `GraphBasedGeneratorGrid2D.cs` **нет**.
+**Порт** консолидирует основной поток в `src/libs/edgar/include/edgar/generator/grid2d/`: `ChainBasedGeneratorGrid2D`, `LayoutControllerGrid2D`, сводный `ConstraintsEvaluatorGrid2D`. Отдельных **плагинов** констрейнтов как в C# нет — штрафы считаются в одном месте. **Отмены** и **ранней остановки по времени/итерациям** в том виде, что в C#, в порте **нет**. Для итерации 2 добавлены `LevelDescriptionMappingGrid2D` и `RoomShapesHandlerGrid2D` (repeat/weights/alias), но реализация остаётся упрощённой относительно полного C#-стека `IntAlias` / `TwoWayDictionary`.
 
 В порт добавлен **альтернативный бэкенд** `strip_packing` в `GraphBasedGeneratorGrid2D` — горизонтальная укладка без SA; в оригинале как отдельный основной путь не выделен.
 
@@ -44,7 +44,7 @@
 
 - **Энергия и ограничения:** в C# — `BasicConstraint`, `CorridorConstraint`, `MinimumDistanceConstraint` и общий `ConstraintsEvaluator`. В порте теперь есть такая же **композиция вкладов** (basic/corridor/min-distance) через фасад `ConstraintsEvaluatorGrid2D`; добавлен флаг `optimize_corridor_constraints` и масштабирование `BasicEnergyUpdater` (по смыслу `10 * averageSize` в цепочке SA).
 - **Simulated annealing:** общая идея (schedule, Metropolis, циклы/триалы) совпадает; в C# возмущение завязано на **layout controller** и **выбор из configuration spaces**. В порте в конфиге явно указано расхождение: вариант с **`max_perturbation_radius`** (сетка сдвигов) вместо полного сэмплинг из КП как в C#. Упрощённый путь в `SimulatedAnnealingEvolverGrid2D::evolve` — случайный сдвиг позиции комнаты.
-- **Выбор формы комнаты** и repeat mode: в C# — `RoomShapesHandler` и mapping; в порте — **упрощённый** выбор шаблона/трансформации в цепочном контуре.
+- **Выбор формы комнаты** и repeat mode: в C# — `RoomShapesHandler` и mapping; в порте теперь есть отдельный `RoomShapesHandlerGrid2D`, который централизует выбор шаблона/трансформации, repeat policy и alias, но без полного parity по внутренним C# типам.
 
 ### 3.3 Отсутствует в порте (ядро)
 

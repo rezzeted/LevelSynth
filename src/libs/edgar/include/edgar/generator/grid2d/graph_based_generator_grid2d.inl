@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "edgar/generator/grid2d/chain_based_generator_grid2d.hpp"
+#include "edgar/generator/grid2d/room_shapes_handler_grid2d.hpp"
 #include "edgar/geometry/overlap.hpp"
 
 namespace edgar::generator::grid2d {
@@ -93,6 +94,11 @@ LayoutGrid2D<TRoom> GraphBasedGeneratorGrid2D<TRoom>::generate_layout() {
     };
     std::vector<Placed> placed;
     placed.reserve(order.size());
+    LevelDescriptionMappingGrid2D<TRoom> mapping(level_);
+    RoomShapesHandlerGrid2D<TRoom> room_shapes_handler(level_, mapping);
+    std::vector<std::optional<RoomTemplateGrid2D>> picked_templates(order.size(), std::nullopt);
+    std::vector<geometry::TransformationGrid2D> picked_transforms(
+        order.size(), geometry::TransformationGrid2D::Identity);
 
     int cursor_x = 0;
 
@@ -100,14 +106,12 @@ LayoutGrid2D<TRoom> GraphBasedGeneratorGrid2D<TRoom>::generate_layout() {
 
     for (const auto& room : order) {
         const auto& room_desc = level_.get_room_description(room);
-        const auto& templates = room_desc.room_templates();
-        std::uniform_int_distribution<std::size_t> pick(0, templates.size() - 1);
-        const RoomTemplateGrid2D& tmpl = templates[pick(rng)];
-
-        const auto& trs = tmpl.allowed_transformations();
-        const geometry::TransformationGrid2D tr =
-            trs.empty() ? geometry::TransformationGrid2D::Identity : trs.front();
-        geometry::PolygonGrid2D outline = tmpl.outline().transform(tr);
+        (void)room_desc;
+        const int room_index = mapping.room_index(room);
+        auto picked = room_shapes_handler.select_for_room(room_index, rng, &picked_templates, &picked_transforms);
+        const RoomTemplateGrid2D tmpl = picked.room_template;
+        const geometry::TransformationGrid2D tr = picked.transformation;
+        geometry::PolygonGrid2D outline = std::move(picked.outline);
 
         bool placed_ok = false;
         for (int attempt = 0; attempt < 10000; ++attempt) {
@@ -137,6 +141,8 @@ LayoutGrid2D<TRoom> GraphBasedGeneratorGrid2D<TRoom>::generate_layout() {
 
                 const int mx = detail::max_world_x(outline, pos);
                 cursor_x = mx + level_.minimum_room_distance + 1 + configuration_.strip_gap_cells;
+                picked_templates[static_cast<std::size_t>(room_index)] = tmpl;
+                picked_transforms[static_cast<std::size_t>(room_index)] = tr;
                 placed_ok = true;
                 break;
             }

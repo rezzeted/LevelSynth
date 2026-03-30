@@ -1,6 +1,6 @@
 #pragma once
 
-#include "edgar/generator/grid2d/detail/room_index_map.hpp"
+#include "edgar/generator/grid2d/level_description_mapping_grid2d.hpp"
 #include "edgar/generator/grid2d/layout_grid2d.hpp"
 #include "edgar/generator/grid2d/level_description_grid2d.hpp"
 #include "edgar/generator/grid2d/room_template_grid2d.hpp"
@@ -17,7 +17,7 @@ namespace edgar::generator::grid2d {
 template <typename TRoom>
 struct Grid2DLayoutState {
     const LevelDescriptionGrid2D<TRoom>* level = nullptr;
-    detail::RoomIndexMap<TRoom> rmap;
+    LevelDescriptionMappingGrid2D<TRoom> rmap;
     graphs::UndirectedAdjacencyListGraph<int> ig;
 
     std::vector<geometry::PolygonGrid2D> outlines;

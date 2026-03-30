@@ -19,7 +19,7 @@ public:
     std::string name;
     int minimum_room_distance = 0;
     bool optimize_corridor_constraints = true;
-    std::optional<RoomTemplateRepeatMode> room_template_repeat_mode_default = RoomTemplateRepeatMode::NoRepeat;
+    std::optional<RoomTemplateRepeatMode> room_template_repeat_mode_default = RoomTemplateRepeatMode::AllowRepeat;
     std::optional<RoomTemplateRepeatMode> room_template_repeat_mode_override;
 
     void add_room(const TRoom& room, const RoomDescriptionGrid2D& room_description) {

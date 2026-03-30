@@ -17,6 +17,7 @@
 #include "edgar/generator/grid2d/level_description_grid2d.hpp"
 #include "edgar/generator/grid2d/grid2d_layout_state.hpp"
 #include "edgar/generator/grid2d/layout_orchestration.hpp"
+#include "edgar/generator/grid2d/room_shapes_handler_grid2d.hpp"
 #include "edgar/generator/grid2d/room_template_grid2d.hpp"
 #include "edgar/generator/grid2d/simulated_annealing_evolver_grid2d.hpp"
 #include "edgar/graphs/undirected_graph.hpp"
@@ -109,7 +110,8 @@ public:
                                   std::vector<geometry::Vector2Int>& positions,
                                   std::vector<std::optional<RoomTemplateGrid2D>>& templates,
                                   std::vector<geometry::TransformationGrid2D>& transforms,
-                                  std::vector<bool>& placed, int room_index, std::mt19937& rng) {
+                                  std::vector<bool>& placed, int room_index, std::mt19937& rng,
+                                  const RoomShapesHandlerGrid2D<TRoom>* room_shapes_handler = nullptr) {
         const int n = static_cast<int>(outlines.size());
         const TRoom rid = rmap.index_to_room[static_cast<std::size_t>(room_index)];
         const auto& rd = level.get_room_description(rid);
@@ -253,11 +255,12 @@ public:
                                  std::vector<geometry::Vector2Int>& positions,
                                  std::vector<std::optional<RoomTemplateGrid2D>>& templates,
                                  std::vector<geometry::TransformationGrid2D>& transforms,
-                                 std::vector<bool>& placed, const std::vector<int>& chain_nodes, std::mt19937& rng) {
+                                 std::vector<bool>& placed, const std::vector<int>& chain_nodes, std::mt19937& rng,
+                                 const RoomShapesHandlerGrid2D<TRoom>* room_shapes_handler = nullptr) {
         for (int room_index : chain_nodes) {
             if (placed[static_cast<std::size_t>(room_index)]) continue;
             if (!add_node_greedily(level, rmap, ig, outlines, positions, templates, transforms,
-                                   placed, room_index, rng)) {
+                                   placed, room_index, rng, room_shapes_handler)) {
                 return false;
             }
         }
@@ -272,7 +275,8 @@ public:
                                      std::vector<geometry::Vector2Int>& positions,
                                      std::vector<std::optional<RoomTemplateGrid2D>>& templates,
                                      std::vector<geometry::TransformationGrid2D>& transforms,
-                                     std::vector<bool>& placed, std::mt19937& rng) {
+                                     std::vector<bool>& placed, std::mt19937& rng,
+                                     const RoomShapesHandlerGrid2D<TRoom>* room_shapes_handler = nullptr) {
         const int n = static_cast<int>(outlines.size());
         for (int i = 0; i < n; ++i) {
             const TRoom rid = rmap.index_to_room[static_cast<std::size_t>(i)];
@@ -281,7 +285,7 @@ public:
             if (placed[static_cast<std::size_t>(i)]) continue;
 
             if (!add_node_greedily(level, rmap, ig, outlines, positions, templates, transforms,
-                                            placed, i, rng)) {
+                                            placed, i, rng, room_shapes_handler)) {
                 return false;
             }
         }
@@ -363,7 +367,8 @@ public:
                 std::vector<geometry::TransformationGrid2D>& transforms, std::mt19937& rng, int* iterations_out,
                 const ChainGenerateContext<TRoom>* ctx = nullptr,
                 Grid2DLayoutState<TRoom>* state_for_inner_clone = nullptr,
-                const std::vector<int>* chain_nodes = nullptr) {
+                const std::vector<int>* chain_nodes = nullptr,
+                const RoomShapesHandlerGrid2D<TRoom>* room_shapes_handler = nullptr) {
         const int n = static_cast<int>(outlines.size());
         if (n <= 0) {
             if (iterations_out) {
@@ -583,22 +588,35 @@ public:
 #endif
 
                 if (shape_vs_pos(rng) < 0.4) {
-                    const TRoom rid = rmap.index_to_room[static_cast<std::size_t>(r)];
-                    const auto& rd = level.get_room_description(rid);
-                    const auto& tmpls = rd.room_templates();
-                    if (!tmpls.empty()) {
-                        std::uniform_int_distribution<std::size_t> pick_t(0, tmpls.size() - 1);
-                        const RoomTemplateGrid2D& tmpl = tmpls[pick_t(rng)];
-                        const auto& trs = tmpl.allowed_transformations();
-                        geometry::TransformationGrid2D tr = geometry::TransformationGrid2D::Identity;
-                        if (!trs.empty()) {
-                            std::uniform_int_distribution<std::size_t> pick_tr(0, trs.size() - 1);
-                            tr = trs[pick_tr(rng)];
+                    if (room_shapes_handler != nullptr) {
+                        std::optional<int> prev_alias = std::nullopt;
+                        if (old_tmpl.has_value()) {
+                            prev_alias = room_shapes_handler->alias_for(*old_tmpl, old_tr);
                         }
-                        outlines[static_cast<std::size_t>(r)] = tmpl.outline().transform(tr);
-                        templates[static_cast<std::size_t>(r)] = tmpl;
-                        transforms[static_cast<std::size_t>(r)] = tr;
+                        auto pick = room_shapes_handler->select_for_room(
+                            r, rng, &templates, &transforms, prev_alias);
+                        outlines[static_cast<std::size_t>(r)] = pick.outline;
+                        templates[static_cast<std::size_t>(r)] = pick.room_template;
+                        transforms[static_cast<std::size_t>(r)] = pick.transformation;
                         did_shape_perturb = true;
+                    } else {
+                        const TRoom rid = rmap.index_to_room[static_cast<std::size_t>(r)];
+                        const auto& rd = level.get_room_description(rid);
+                        const auto& tmpls = rd.room_templates();
+                        if (!tmpls.empty()) {
+                            std::uniform_int_distribution<std::size_t> pick_t(0, tmpls.size() - 1);
+                            const RoomTemplateGrid2D& tmpl = tmpls[pick_t(rng)];
+                            const auto& trs = tmpl.allowed_transformations();
+                            geometry::TransformationGrid2D tr = geometry::TransformationGrid2D::Identity;
+                            if (!trs.empty()) {
+                                std::uniform_int_distribution<std::size_t> pick_tr(0, trs.size() - 1);
+                                tr = trs[pick_tr(rng)];
+                            }
+                            outlines[static_cast<std::size_t>(r)] = tmpl.outline().transform(tr);
+                            templates[static_cast<std::size_t>(r)] = tmpl;
+                            transforms[static_cast<std::size_t>(r)] = tr;
+                            did_shape_perturb = true;
+                        }
                     }
                     const auto doors_tab = doors_at_index();
                     const std::vector<DoorLineGrid2D>& my_doors = doors_tab[static_cast<std::size_t>(r)];
@@ -666,7 +684,7 @@ public:
                             }
                             const bool corridors_ok = try_insert_corridors(
                                 *cl.level, cl.rmap, cl.ig, cl.outlines, cl.positions,
-                                cl.templates, cl.transforms, clone_placed, rng);
+                                cl.templates, cl.transforms, clone_placed, rng, room_shapes_handler);
 
                             int tcc_iters = 0;
                             const int tcc_pass = std::min(64, std::max(8, n));
@@ -771,9 +789,10 @@ public:
     template <typename TRoom>
     void evolve(Grid2DLayoutState<TRoom>& state, std::mt19937& rng, int* iterations_out,
                  const ChainGenerateContext<TRoom>* ctx = nullptr,
-                 const std::vector<int>* chain_nodes = nullptr) {
+                 const std::vector<int>* chain_nodes = nullptr,
+                 const RoomShapesHandlerGrid2D<TRoom>* room_shapes_handler = nullptr) {
         evolve(*state.level, state.rmap, state.ig, state.outlines, state.positions, state.templates, state.transforms,
-               rng, iterations_out, ctx, &state, chain_nodes);
+               rng, iterations_out, ctx, &state, chain_nodes, room_shapes_handler);
     }
 
 private:

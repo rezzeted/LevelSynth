@@ -15,6 +15,7 @@
 #include "edgar/generator/grid2d/constraints_evaluator_grid2d.hpp"
 #include "edgar/generator/grid2d/level_description_grid2d.hpp"
 #include "edgar/generator/grid2d/layout_controller_grid2d.hpp"
+#include "edgar/generator/grid2d/room_shapes_handler_grid2d.hpp"
 #include "edgar/geometry/transformation_grid2d.hpp"
 
 #include <algorithm>
@@ -88,6 +89,7 @@ public:
             is_corridor_flags[static_cast<std::size_t>(i)] =
                 level.get_room_description(rmap.index_to_room[static_cast<std::size_t>(i)]).is_corridor();
         }
+        const RoomShapesHandlerGrid2D<TRoom> room_shapes_handler(level, rmap);
 
         auto penalty_total = [&](const std::vector<geometry::PolygonGrid2D>& ol,
                                  const std::vector<geometry::Vector2Int>& pos) {
@@ -164,31 +166,22 @@ public:
             if (use_greedy_tree) {
                 for (int ri : order) {
                     if (!LayoutControllerGrid2D::add_node_greedily(level, rmap, ig, outlines, positions, templates,
-                                                                    transforms, placed, ri, rng)) {
+                                                                    transforms, placed, ri, rng, &room_shapes_handler)) {
                         throw std::runtime_error("ChainBasedGeneratorGrid2D: greedy tree placement failed");
                     }
                 }
             } else {
                 std::uniform_int_distribution<int> jitter(-32, 32);
                 auto pick_template = [&](int room_index) {
-                    const TRoom id = rmap.index_to_room[static_cast<std::size_t>(room_index)];
-                    const auto& rd = level.get_room_description(id);
-                    std::uniform_int_distribution<std::size_t> pick(0, rd.room_templates().size() - 1);
-                    const RoomTemplateGrid2D& tmpl = rd.room_templates()[pick(rng)];
-                    const auto& trs = tmpl.allowed_transformations();
-                    const geometry::TransformationGrid2D tr =
-                        trs.empty() ? geometry::TransformationGrid2D::Identity : trs.front();
-                    geometry::PolygonGrid2D poly = tmpl.outline().transform(tr);
-                    return std::tuple{tmpl, rd, poly, tr};
+                    return room_shapes_handler.select_for_room(room_index, rng, &templates, &transforms);
                 };
 
                 {
                     const int r0 = order[0];
-                    auto [tmpl, rd, poly, tr] = pick_template(r0);
-                    (void)rd;
-                    templates[static_cast<std::size_t>(r0)] = std::move(tmpl);
-                    outlines[static_cast<std::size_t>(r0)] = std::move(poly);
-                    transforms[static_cast<std::size_t>(r0)] = tr;
+                    auto pick = pick_template(r0);
+                    templates[static_cast<std::size_t>(r0)] = std::move(pick.room_template);
+                    outlines[static_cast<std::size_t>(r0)] = std::move(pick.outline);
+                    transforms[static_cast<std::size_t>(r0)] = pick.transformation;
                     positions[static_cast<std::size_t>(r0)] = {0, 0};
                     placed[static_cast<std::size_t>(r0)] = true;
                 }
@@ -205,11 +198,10 @@ public:
                     if (pj < 0) {
                         throw std::runtime_error("ChainBasedGeneratorGrid2D: no placed neighbour");
                     }
-                    auto [tmpl, rd, poly, tr] = pick_template(ri);
-                    (void)rd;
-                    templates[static_cast<std::size_t>(ri)] = std::move(tmpl);
-                    outlines[static_cast<std::size_t>(ri)] = std::move(poly);
-                    transforms[static_cast<std::size_t>(ri)] = tr;
+                    auto pick = pick_template(ri);
+                    templates[static_cast<std::size_t>(ri)] = std::move(pick.room_template);
+                    outlines[static_cast<std::size_t>(ri)] = std::move(pick.outline);
+                    transforms[static_cast<std::size_t>(ri)] = pick.transformation;
 
                     bool ok = false;
                     for (int attempt = 0; attempt < 8000; ++attempt) {
@@ -274,7 +266,7 @@ public:
                     const auto& chain_sa_config = sa_provider ? sa_provider->get(chain.number) : sa_config;
                     LayoutControllerGrid2D controller(chain_sa_config);
                     int sa_iters = 0;
-                    controller.evolve(state, rng, &sa_iters, ctx, &chain.nodes);
+                    controller.evolve(state, rng, &sa_iters, ctx, &chain.nodes, &room_shapes_handler);
                     iter_count += sa_iters;
                     if (ctx && ctx->stats_out) {
                         ctx->stats_out->iterations_since_last_event += sa_iters;
