@@ -322,11 +322,17 @@ PresetCatalogLoadResult load_preset_catalog_with_status(const std::string& base_
             return out;
         }
 
+        // Only YAML files directly in Maps/ (not in subfolders like Maps/Thesis/).
         for (const auto& entry : fs::directory_iterator(maps_dir)) {
-            if (entry.path().extension() != ".yml" && entry.path().extension() != ".yaml") {
+            if (!entry.is_regular_file()) {
                 continue;
             }
-            std::ifstream f(entry.path().string());
+            const auto& path = entry.path();
+            const auto ext = path.extension();
+            if (ext != ".yml" && ext != ".yaml") {
+                continue;
+            }
+            std::ifstream f(path.string());
             if (!f.is_open()) {
                 continue;
             }
@@ -338,8 +344,13 @@ PresetCatalogLoadResult load_preset_catalog_with_status(const std::string& base_
                 continue;
             }
             try {
+                const fs::path rel = fs::relative(path, maps_dir);
+                const std::string file_id = rel.generic_string();
+                fs::path rel_display = rel;
+                rel_display.replace_extension("");
+                const std::string display_name = rel_display.generic_string();
                 PresetMap map =
-                    map_from_yaml_root(root, entry.path().filename().string(), entry.path().stem().string());
+                    map_from_yaml_root(root, file_id, display_name.empty() ? rel.stem().string() : display_name);
                 out.catalog.maps.push_back(std::move(map));
             } catch (const std::exception&) {
                 continue;
@@ -377,10 +388,15 @@ PresetCatalogLoadResult load_preset_catalog_from_map_file(const std::string& map
             return full;
         }
 
-        const std::string target_name = map_file.filename().string();
+        const fs::path maps_dir = base / "Maps";
+        std::error_code rec;
+        const fs::path rel_to_maps = fs::relative(map_file, maps_dir, rec);
+        const std::string target_key =
+            (!rec && !rel_to_maps.empty()) ? rel_to_maps.generic_string() : map_file.filename().string();
+
         std::vector<PresetMap> filtered;
         for (auto& m : full.catalog.maps) {
-            if (m.filename == target_name) {
+            if (m.filename == target_key || m.filename == map_file.filename().string()) {
                 filtered.push_back(std::move(m));
             }
         }
@@ -397,8 +413,17 @@ PresetCatalogLoadResult load_preset_catalog_from_map_file(const std::string& map
             return out;
         }
         YAML::Node root = YAML::Load(f);
-        PresetMap map =
-            map_from_yaml_root(root, map_file.filename().string(), map_file.stem().string());
+        const std::string file_id =
+            (!rec && !rel_to_maps.empty()) ? rel_to_maps.generic_string() : map_file.filename().string();
+        std::string display_name;
+        if (!rec && !rel_to_maps.empty()) {
+            fs::path d = rel_to_maps;
+            d.replace_extension("");
+            display_name = d.generic_string();
+        } else {
+            display_name = map_file.stem().string();
+        }
+        PresetMap map = map_from_yaml_root(root, file_id, display_name);
         full.catalog.maps = {std::move(map)};
         full.error.clear();
         return full;

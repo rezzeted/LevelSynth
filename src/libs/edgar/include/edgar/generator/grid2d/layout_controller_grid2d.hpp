@@ -10,6 +10,7 @@
 
 #include "edgar/generator/common/basic_energy_updater.hpp"
 #include "edgar/generator/common/simulated_annealing_configuration.hpp"
+#include "edgar/generator/grid2d/configuration_spaces_generator.hpp"
 #include "edgar/generator/grid2d/configuration_spaces_grid2d.hpp"
 #include "edgar/generator/grid2d/constraints_evaluator_grid2d.hpp"
 #include "edgar/generator/grid2d/detail/room_index_map.hpp"
@@ -176,7 +177,35 @@ public:
                         }
                     }
 
+                    // Filter candidates: only keep those that lie on the CS for ALL placed neighbors.
+                    // This mirrors C# `GetMaximumIntersection`.
+                    std::vector<geometry::Vector2Int> filtered_candidates;
+                    filtered_candidates.reserve(candidates.size());
+                    ConfigurationSpacesGenerator cs_check;
                     for (const auto& cand_pos : candidates) {
+                        bool ok_all = true;
+                        for (int nb : placed_neighbours) {
+                            if (doors_tab[static_cast<std::size_t>(nb)].empty()) continue;
+                            const auto cs = cs_check.get_configuration_space(
+                                outline, doors,
+                                outlines[static_cast<std::size_t>(nb)],
+                                doors_tab[static_cast<std::size_t>(nb)]);
+                            const geometry::Vector2Int delta{
+                                cand_pos.x - positions[static_cast<std::size_t>(nb)].x,
+                                cand_pos.y - positions[static_cast<std::size_t>(nb)].y};
+                            if (!offset_on_configuration_space(delta, cs)) {
+                                ok_all = false;
+                                break;
+                            }
+                        }
+                        if (ok_all) {
+                            filtered_candidates.push_back(cand_pos);
+                        }
+                    }
+                    // If no candidate satisfies all neighbors, fall back to full union.
+                    const auto& eval_candidates = filtered_candidates.empty() ? candidates : filtered_candidates;
+
+                    for (const auto& cand_pos : eval_candidates) {
                         bool overlap = false;
                         for (int j = 0; j < n; ++j) {
                             if (j == room_index || !placed[static_cast<std::size_t>(j)]) continue;
@@ -191,8 +220,10 @@ public:
 
                         outlines[static_cast<std::size_t>(room_index)] = outline;
                         positions[static_cast<std::size_t>(room_index)] = cand_pos;
+                        const auto vcs = ConstraintsEvaluatorGrid2D::precompute_cs_validity(
+                            outlines, positions, doors_tab, ig);
                         auto energy_data = ConstraintsEvaluatorGrid2D::incident_to_room(
-                            static_cast<std::size_t>(room_index), outlines, positions,
+                            static_cast<std::size_t>(room_index), outlines, positions, vcs,
                             level.minimum_room_distance, &is_corridor, level.optimize_corridor_constraints);
                         double penalty = common::BasicEnergyUpdater::total_penalty(energy_data);
 
@@ -311,9 +342,22 @@ public:
             is_corridor[static_cast<std::size_t>(i)] =
                 level.get_room_description(rmap.index_to_room[static_cast<std::size_t>(i)]).is_corridor();
         }
+        auto build_doors_tab = [&]() {
+            std::vector<std::vector<DoorLineGrid2D>> dt(static_cast<std::size_t>(n));
+            for (int j = 0; j < n; ++j) {
+                const auto& ot = templates[static_cast<std::size_t>(j)];
+                if (ot.has_value()) {
+                    dt[static_cast<std::size_t>(j)] =
+                        ot->doors().get_doors(outlines[static_cast<std::size_t>(j)]);
+                }
+            }
+            return dt;
+        };
         auto eval_full = [&]() {
+            const auto dt = build_doors_tab();
+            const auto vcs = ConstraintsEvaluatorGrid2D::precompute_cs_validity(outlines, positions, dt, ig);
             return ConstraintsEvaluatorGrid2D::evaluate(
-                outlines, positions, level.minimum_room_distance, &is_corridor,
+                outlines, positions, vcs, level.minimum_room_distance, &is_corridor,
                 level.optimize_corridor_constraints);
         };
         if (eval_full().is_valid()) {
@@ -325,14 +369,7 @@ public:
         while (no_progress < max_passes_without_progress) {
             bool progress = false;
             for (int r = 0; r < n; ++r) {
-                std::vector<std::vector<DoorLineGrid2D>> doors_tab(static_cast<std::size_t>(n));
-                for (int j = 0; j < n; ++j) {
-                    const auto& ot = templates[static_cast<std::size_t>(j)];
-                    if (ot.has_value()) {
-                        doors_tab[static_cast<std::size_t>(j)] =
-                            ot->doors().get_doors(outlines[static_cast<std::size_t>(j)]);
-                    }
-                }
+                std::vector<std::vector<DoorLineGrid2D>> doors_tab = build_doors_tab();
                 const geometry::Vector2Int old_p = positions[static_cast<std::size_t>(r)];
                 const auto gp = greedy_position_from_configuration_spaces(
                     r, level, rmap, ig, outlines[static_cast<std::size_t>(r)],
@@ -405,9 +442,23 @@ public:
             return tab;
         };
 
+        auto full_cs_validity = [&]() {
+            const auto dt = doors_at_index();
+            return ConstraintsEvaluatorGrid2D::precompute_cs_validity(outlines, positions, dt, ig);
+        };
+
+        // Maintained incrementally: updated only for perturbed room's edges.
+        std::vector<std::vector<bool>> cs_valid_cache = full_cs_validity();
+
+        auto update_cs_for_room = [&](int r) {
+            const auto dt = doors_at_index();
+            ConstraintsEvaluatorGrid2D::update_cs_validity_for_room(
+                static_cast<std::size_t>(r), cs_valid_cache, outlines, positions, dt, ig);
+        };
+
         auto overlap_total = [&]() {
             return ConstraintsEvaluatorGrid2D::evaluate(
-                outlines, positions, level.minimum_room_distance, &is_corridor,
+                outlines, positions, cs_valid_cache, level.minimum_room_distance, &is_corridor,
                 level.optimize_corridor_constraints).overlap_penalty;
         };
 
@@ -467,8 +518,8 @@ public:
 
         auto energy = [&]() {
             return common::BasicEnergyUpdater::total_penalty(
-                ConstraintsEvaluatorGrid2D::evaluate(outlines, positions, level.minimum_room_distance, &is_corridor,
-                                                     level.optimize_corridor_constraints),
+                ConstraintsEvaluatorGrid2D::evaluate(outlines, positions, cs_valid_cache, level.minimum_room_distance,
+                                                     &is_corridor, level.optimize_corridor_constraints),
                 energy_scale);
         };
 
@@ -606,6 +657,7 @@ public:
 
                 const common::EnergyData incident_old =
                     ConstraintsEvaluatorGrid2D::incident_to_room(static_cast<std::size_t>(r), outlines, positions,
+                                                                 cs_valid_cache,
                                                                  level.minimum_room_distance, &is_corridor,
                                                                  level.optimize_corridor_constraints);
                 const double incident_old_tot = common::BasicEnergyUpdater::total_penalty(incident_old, energy_scale);
@@ -687,18 +739,19 @@ public:
                     }
                 }
 
+                update_cs_for_room(r);
                 const common::EnergyData incident_new =
                     ConstraintsEvaluatorGrid2D::incident_to_room(static_cast<std::size_t>(r), outlines, positions,
+                                                                 cs_valid_cache,
                                                                  level.minimum_room_distance, &is_corridor,
                                                                  level.optimize_corridor_constraints);
                 const double new_e =
                     e - incident_old_tot + common::BasicEnergyUpdater::total_penalty(incident_new, energy_scale);
                 const double energy_delta = new_e - e;
 
-                // C# order: IsLayoutValid -> IsDifferentEnough -> TryCompleteChain on clone -> yield
-                // BEFORE Metropolis (which is independent).
+                // C# `IsLayoutValid`: all nodes must have zero overlap AND zero move-distance.
                 const double new_overlap = total_overlap - incident_old.overlap_penalty + incident_new.overlap_penalty;
-                const bool is_valid = (new_overlap <= 0.0);
+                const bool is_valid = (new_overlap <= 0.0) && (new_e <= 0.0);
 
                 if (is_valid) {
                     if (ctx && ctx->on_partial_valid && state_for_inner_clone) {
@@ -731,10 +784,20 @@ public:
                             if (ctx && ctx->stats_out) {
                                 ctx->stats_out->iterations_since_last_event += tcc_iters;
                             }
+                            std::vector<std::vector<DoorLineGrid2D>> cl_doors(static_cast<std::size_t>(n));
+                            for (int idx2 = 0; idx2 < n; ++idx2) {
+                                if (cl.templates[static_cast<std::size_t>(idx2)].has_value()) {
+                                    cl_doors[static_cast<std::size_t>(idx2)] =
+                                        cl.templates[static_cast<std::size_t>(idx2)]->doors().get_doors(
+                                            cl.outlines[static_cast<std::size_t>(idx2)]);
+                                }
+                            }
+                            const auto cl_vcs = ConstraintsEvaluatorGrid2D::precompute_cs_validity(
+                                cl.outlines, cl.positions, cl_doors, cl.ig);
                             const double pen_after =
                                 common::BasicEnergyUpdater::total_penalty(ConstraintsEvaluatorGrid2D::evaluate(
-                                    cl.outlines, cl.positions, level.minimum_room_distance, &is_corridor,
-                                    level.optimize_corridor_constraints),
+                                    cl.outlines, cl.positions, cl_vcs, level.minimum_room_distance,
+                                    &is_corridor, level.optimize_corridor_constraints),
                                     energy_scale);
                             if (tcc_ok) {
                                 yielded_snapshots.push_back(std::move(snap));
@@ -781,6 +844,7 @@ public:
                         templates[static_cast<std::size_t>(r)] = old_tmpl;
                         transforms[static_cast<std::size_t>(r)] = old_tr;
                     }
+                    update_cs_for_room(r);
                 }
 
                 if (ctx && (iterations % 32) == 0 &&

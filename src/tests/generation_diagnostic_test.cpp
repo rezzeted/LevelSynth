@@ -104,8 +104,9 @@ void trace_door_pipeline(const std::shared_ptr<spdlog::logger>& L, const LayoutG
 
             auto doors_a = room_a.room_template.doors().get_doors(room_a.outline);
             auto doors_b = room_b.room_template.doors().get_doors(room_b.outline);
-            const auto cs = cs_gen.get_configuration_space(room_a.outline, doors_a, room_b.outline, doors_b);
+            const auto cs = cs_gen.get_configuration_space(room_b.outline, doors_b, room_a.outline, doors_a);
 
+            // Same as Edgar `BasicLayoutConverterGrid2D`: neighbour - vertex for CS(neighbour, vertex).
             const Vector2Int rel = room_b.position - room_a.position;
             auto choices = detail::door_choices_from_config_space(rel, cs);
 

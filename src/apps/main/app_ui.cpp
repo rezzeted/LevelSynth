@@ -1,7 +1,6 @@
 #include "app_ui.hpp"
 
 #include "app_state.hpp"
-#include "file_dialogs.hpp"
 #include "layout_preview.hpp"
 #include "level_synth_globals.hpp"
 
@@ -76,50 +75,13 @@ void draw_left_settings_panel(const PanelLayout& zone) {
     ImGui::SetNextWindowSize(zone.size);
     ImGui::Begin("##LeftSettings", nullptr, kPanelFlags);
 
-    ImGui::SeparatorText("Resources");
-    ImGui::InputText("Base path", g_resources_path, sizeof(g_resources_path));
-    if (ImGui::Button("Browse folder…", ImVec2(-1.0f, 0.0f))) {
-        std::string p;
-        if (pick_folder_dialog(p)) {
-            std::strncpy(g_resources_path, p.c_str(), sizeof(g_resources_path) - 1);
-            g_resources_path[sizeof(g_resources_path) - 1] = '\0';
-            try {
-                reload_catalog_from_resources_dir(g_resources_path);
-            } catch (const std::exception& e) {
-                app_log_push_fmt("Error: %s", e.what());
-            }
-        }
-    }
-    if (ImGui::Button("Open map file…", ImVec2(-1.0f, 0.0f))) {
-        std::string p;
-        if (pick_open_yaml_file(p)) {
-            try {
-                reload_catalog_from_map_file(p);
-                if (g_catalog_loaded && !g_catalog.base_path.empty()) {
-                    std::strncpy(g_resources_path, g_catalog.base_path.c_str(), sizeof(g_resources_path) - 1);
-                    g_resources_path[sizeof(g_resources_path) - 1] = '\0';
-                }
-            } catch (const std::exception& e) {
-                app_log_push_fmt("Error: %s", e.what());
-            }
-        }
-    }
-    if (ImGui::Button("Reload from path", ImVec2(-1.0f, 0.0f))) {
-        try {
-            reload_catalog_from_resources_dir(std::string(g_resources_path));
-        } catch (const std::exception& e) {
-            app_log_push_fmt("Error: %s", e.what());
-        }
-    }
-    ImGui::Spacing();
-
-    ImGui::SeparatorText("Preset");
+    ImGui::SeparatorText("Map");
     if (g_catalog_loaded) {
         const int n_maps = static_cast<int>(g_catalog.maps.size());
         g_selected_preset = std::clamp(g_selected_preset, 0, n_maps - 1);
         const auto& cur = g_catalog.maps[static_cast<std::size_t>(g_selected_preset)];
 
-        if (ImGui::BeginCombo("Map", cur.display_name.c_str())) {
+        if (ImGui::BeginCombo("##map_combo", cur.display_name.c_str())) {
             for (int i = 0; i < n_maps; ++i) {
                 const bool selected = (i == g_selected_preset);
                 if (ImGui::Selectable(g_catalog.maps[static_cast<std::size_t>(i)].display_name.c_str(),
@@ -133,12 +95,21 @@ void draw_left_settings_panel(const PanelLayout& zone) {
             ImGui::EndCombo();
         }
 
+        ImGui::TextDisabled("Maps: <repo>/resources/edgar_gui/Maps/  (%d files)", n_maps);
+        ImGui::TextDisabled("%s", g_resources_path);
         ImGui::Text("Rooms: %d-%d | Passages: %d", cur.room_from, cur.room_to,
                     static_cast<int>(cur.passages.size()));
         ImGui::Text("Corridors: %s", cur.corridors_enabled ? "Yes" : "No");
     } else {
-        ImGui::TextUnformatted("No presets found (resources/edgar_gui)");
-        ImGui::TextUnformatted("Using built-in 4-room cycle");
+        ImGui::TextUnformatted("No maps under resources/edgar_gui/Maps/");
+        ImGui::TextDisabled("%s", g_resources_path);
+    }
+    if (ImGui::Button("Reload catalog", ImVec2(-1.0f, 0.0f))) {
+        try {
+            reload_catalog_from_default_resources();
+        } catch (const std::exception& e) {
+            app_log_push_fmt("Error: %s", e.what());
+        }
     }
     ImGui::Spacing();
 

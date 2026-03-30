@@ -31,6 +31,8 @@ extern bool g_catalog_from_argv;
 
 void reload_catalog_from_resources_dir(const std::string& dir);
 void reload_catalog_from_map_file(const std::string& map_path);
+/// Resets resource root to <repo>/resources/edgar_gui (walk up from executable) and reloads catalog.
+void reload_catalog_from_default_resources();
 
 void generate_from_preset(int preset_idx, unsigned rng_seed);
 void generate_hardcoded(unsigned rng_seed);

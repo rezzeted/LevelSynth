@@ -77,6 +77,46 @@ std::string get_executable_dir() {
     return std::string(path);
 }
 
+/// Walk up from the executable directory until `resources/edgar_gui` contains Maps/ and Rooms/ (repo layout).
+static std::string resolve_edgar_gui_base_directory() {
+    namespace fs = std::filesystem;
+    try {
+        fs::path dir = get_executable_dir();
+        for (int depth = 0; depth < 12; ++depth) {
+            const fs::path candidate = dir / "resources" / "edgar_gui";
+            if (fs::is_directory(candidate / "Maps") && fs::is_directory(candidate / "Rooms")) {
+                std::error_code ec;
+                const fs::path canon = fs::weakly_canonical(candidate, ec);
+                return (ec ? candidate : canon).string();
+            }
+            if (!dir.has_parent_path()) {
+                break;
+            }
+            const fs::path parent = dir.parent_path();
+            if (parent == dir) {
+                break;
+            }
+            dir = parent;
+        }
+    } catch (...) {
+    }
+    try {
+        namespace fs = std::filesystem;
+        std::error_code ec;
+        const fs::path fb =
+            fs::weakly_canonical(fs::path(get_executable_dir()) / "resources" / "edgar_gui", ec);
+        return (ec ? fs::path(get_executable_dir()) / "resources" / "edgar_gui" : fb).string();
+    } catch (...) {
+        return get_executable_dir() + "/resources/edgar_gui";
+    }
+}
+
+static void assign_default_resources_path() {
+    const std::string p = resolve_edgar_gui_base_directory();
+    std::strncpy(g_resources_path, p.c_str(), sizeof(g_resources_path) - 1);
+    g_resources_path[sizeof(g_resources_path) - 1] = '\0';
+}
+
 void apply_catalog_load(edgar::generator::grid2d::PresetCatalogLoadResult&& r) {
     using namespace edgar::generator::grid2d;
     if (!r.error.empty()) {
@@ -107,19 +147,17 @@ void reload_catalog_from_map_file(const std::string& map_path) {
     apply_catalog_load(load_preset_catalog_from_map_file(map_path));
 }
 
-void parse_cli_args(int argc, char** argv) {
-    const std::string def = get_executable_dir() + "/resources/edgar_gui";
-    std::strncpy(g_resources_path, def.c_str(), sizeof(g_resources_path) - 1);
-    g_resources_path[sizeof(g_resources_path) - 1] = '\0';
+void reload_catalog_from_default_resources() {
+    assign_default_resources_path();
+    reload_catalog_from_resources_dir(std::string(g_resources_path));
+}
 
-    std::string resources_override;
+void parse_cli_args(int argc, char** argv) {
+    assign_default_resources_path();
+
     std::string map_file_arg;
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
-        if (a == "--resources" && i + 1 < argc) {
-            resources_override = argv[++i];
-            continue;
-        }
         if (a.size() >= 4) {
             const bool yml = (a.size() >= 4 && a.compare(a.size() - 4, 4, ".yml") == 0);
             const bool yaml = (a.size() >= 5 && a.compare(a.size() - 5, 5, ".yaml") == 0);
@@ -127,10 +165,6 @@ void parse_cli_args(int argc, char** argv) {
                 map_file_arg = a;
             }
         }
-    }
-    if (!resources_override.empty()) {
-        std::strncpy(g_resources_path, resources_override.c_str(), sizeof(g_resources_path) - 1);
-        g_resources_path[sizeof(g_resources_path) - 1] = '\0';
     }
     if (!map_file_arg.empty()) {
         reload_catalog_from_map_file(map_file_arg);
@@ -337,9 +371,15 @@ int main(int argc, char* argv[])
                                 ls::g_resources_path[sizeof(ls::g_resources_path) - 1] = '\0';
                             }
                         } else if (fs::is_directory(dp)) {
-                            std::strncpy(ls::g_resources_path, dropped.c_str(), sizeof(ls::g_resources_path) - 1);
-                            ls::g_resources_path[sizeof(ls::g_resources_path) - 1] = '\0';
-                            ls::reload_catalog_from_resources_dir(dropped);
+                            const fs::path maps = dp / "Maps";
+                            const fs::path rooms = dp / "Rooms";
+                            if (fs::is_directory(maps) && fs::is_directory(rooms)) {
+                                std::strncpy(ls::g_resources_path, dropped.c_str(), sizeof(ls::g_resources_path) - 1);
+                                ls::g_resources_path[sizeof(ls::g_resources_path) - 1] = '\0';
+                                ls::reload_catalog_from_resources_dir(dropped);
+                            } else {
+                                app_log_push("Drop ignored: folder must contain Maps/ and Rooms/ (edgar_gui root).");
+                            }
                         }
                     }
                 } catch (const std::exception& e) {

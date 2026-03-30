@@ -66,9 +66,11 @@ void compute_layout_doors(LayoutGrid2D<TRoom>& layout, const LevelDescriptionGri
             auto doors_a = room_a.room_template.doors().get_doors(room_a.outline);
             auto doors_b = room_b.room_template.doors().get_doors(room_b.outline);
 
+            // Match Edgar-DotNet `BasicLayoutConverterGrid2D.GetDoors(configuration1, configuration2)`:
+            // CS = GetConfigurationSpace(configuration2, configuration1) -> moving = neighbour, fixed = vertex.
+            // position = configuration2.Position - configuration1.Position; door lines then += configuration1.Position.
             const auto cs = cs_gen.get_configuration_space(
-                room_a.outline, doors_a, room_b.outline, doors_b);
-
+                room_b.outline, doors_b, room_a.outline, doors_a);
             const geometry::Vector2Int position = room_b.position - room_a.position;
             auto choices = detail::door_choices_from_config_space(position, cs);
             for (auto& c : choices) {

@@ -91,11 +91,24 @@ public:
         }
         const RoomShapesHandlerGrid2D<TRoom> room_shapes_handler(level, rmap);
 
+        auto build_doors_tab = [&](const std::vector<geometry::PolygonGrid2D>& ol,
+                                    const std::vector<std::optional<RoomTemplateGrid2D>>& tpls) {
+            std::vector<std::vector<DoorLineGrid2D>> dt(static_cast<std::size_t>(n));
+            for (int j = 0; j < n; ++j) {
+                if (tpls[static_cast<std::size_t>(j)].has_value()) {
+                    dt[static_cast<std::size_t>(j)] =
+                        tpls[static_cast<std::size_t>(j)]->doors().get_doors(ol[static_cast<std::size_t>(j)]);
+                }
+            }
+            return dt;
+        };
         auto penalty_total = [&](const std::vector<geometry::PolygonGrid2D>& ol,
                                  const std::vector<geometry::Vector2Int>& pos) {
+            const auto dt = build_doors_tab(ol, state.templates);
+            const auto vcs = ConstraintsEvaluatorGrid2D::precompute_cs_validity(ol, pos, dt, ig);
             return common::BasicEnergyUpdater::total_penalty(
-                ConstraintsEvaluatorGrid2D::evaluate(ol, pos, level.minimum_room_distance, &is_corridor_flags,
-                                                     level.optimize_corridor_constraints));
+                ConstraintsEvaluatorGrid2D::evaluate(ol, pos, vcs, level.minimum_room_distance,
+                                                     &is_corridor_flags, level.optimize_corridor_constraints));
         };
 
         const int max_layout_restarts =
@@ -231,6 +244,15 @@ public:
                     transforms[static_cast<std::size_t>(ri)] = pick.transformation;
 
                     bool ok = false;
+                    std::vector<std::vector<DoorLineGrid2D>> doors_tab(static_cast<std::size_t>(n));
+                    for (int j = 0; j < n; ++j) {
+                        if (!templates[static_cast<std::size_t>(j)].has_value()) continue;
+                        if (j == ri || placed[static_cast<std::size_t>(j)]) {
+                            doors_tab[static_cast<std::size_t>(j)] =
+                                templates[static_cast<std::size_t>(j)]->doors().get_doors(
+                                    outlines[static_cast<std::size_t>(j)]);
+                        }
+                    }
                     for (int attempt = 0; attempt < 8000; ++attempt) {
                         ++iter_count;
                         if (ctx && ctx->iter_budget_sink) {
@@ -245,17 +267,6 @@ public:
                         }
                         if (ctx && ctx->stats_out) {
                             ctx->stats_out->iterations_since_last_event++;
-                        }
-                        std::vector<std::vector<DoorLineGrid2D>> doors_tab(static_cast<std::size_t>(n));
-                        for (int j = 0; j < n; ++j) {
-                            if (!templates[static_cast<std::size_t>(j)].has_value()) {
-                                continue;
-                            }
-                            if (j == ri || placed[static_cast<std::size_t>(j)]) {
-                                doors_tab[static_cast<std::size_t>(j)] =
-                                    templates[static_cast<std::size_t>(j)]->doors().get_doors(
-                                        outlines[static_cast<std::size_t>(j)]);
-                            }
                         }
                         const auto greedy_pos = LayoutControllerGrid2D::greedy_position_from_configuration_spaces(
                             ri, level, rmap, ig, outlines[static_cast<std::size_t>(ri)],
