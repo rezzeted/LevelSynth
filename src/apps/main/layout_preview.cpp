@@ -1,5 +1,7 @@
 #include "layout_preview.hpp"
 
+#include "edgar/io/layout_outline_with_door_gaps.hpp"
+
 #include <algorithm>
 #include <limits>
 #include <vector>
@@ -47,16 +49,24 @@ void draw_layout_preview_imgui(const edgar::generator::grid2d::LayoutGrid2D<int>
     };
 
     for (const auto& room : layout.rooms) {
-        std::vector<ImVec2> pts;
-        pts.reserve(room.outline.points().size());
-        for (const auto& p : room.outline.points()) {
-            pts.push_back(to_screen(p.x + room.position.x, p.y + room.position.y));
+        std::vector<edgar::geometry::OrthogonalLineGrid2D> door_lines;
+        door_lines.reserve(room.doors.size());
+        for (const auto& d : room.doors) {
+            door_lines.push_back(d.door_line);
         }
-        if (pts.size() < 2) {
+        auto outline = edgar::io::layout_outline_with_door_gaps(room.outline, std::move(door_lines));
+        if (outline.empty()) {
             continue;
         }
         const ImU32 stroke = room.is_corridor ? IM_COL32(120, 200, 230, 255) : IM_COL32(180, 220, 130, 255);
-        dl->AddPolyline(pts.data(), static_cast<int>(pts.size()), stroke, ImDrawFlags_Closed, 2.5f);
+        ImVec2 last = to_screen(outline.back().first.x + room.position.x, outline.back().first.y + room.position.y);
+        for (const auto& pr : outline) {
+            const ImVec2 pt = to_screen(pr.first.x + room.position.x, pr.first.y + room.position.y);
+            if (pr.second) {
+                dl->AddLine(last, pt, stroke, 2.5f);
+            }
+            last = pt;
+        }
     }
 
     dl->PopClipRect();

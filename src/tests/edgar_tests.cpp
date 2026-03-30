@@ -21,6 +21,7 @@
 #include "edgar/generator/grid2d/room_shapes_handler_grid2d.hpp"
 #include "edgar/generator/common/simulated_annealing_configuration.hpp"
 #include "edgar/io/layout_json.hpp"
+#include "edgar/io/layout_outline_with_door_gaps.hpp"
 #include "edgar/io/png_rgba.hpp"
 #include "edgar/graphs/graph_algorithms.hpp"
 #include "edgar/graphs/undirected_graph.hpp"
@@ -404,6 +405,33 @@ TEST(EdgarGeometry, RectanglePolygonClockwise) {
     EXPECT_GE(poly.points().size(), 4u);
     EXPECT_EQ(poly.bounding_rectangle().width(), 6);
     EXPECT_EQ(poly.bounding_rectangle().height(), 10);
+}
+
+TEST(EdgarIo, LayoutOutlineWithDoorGaps_squareNoDoors_allWallSegments) {
+    using namespace edgar::geometry;
+    using namespace edgar::io;
+    const PolygonGrid2D poly = PolygonGrid2D::get_square(8);
+    const auto outline = layout_outline_with_door_gaps(poly, {});
+    ASSERT_FALSE(outline.empty());
+    for (const auto& pr : outline) {
+        EXPECT_TRUE(pr.second);
+    }
+}
+
+TEST(EdgarIo, LayoutOutlineWithDoorGaps_squareOneDoor_gapEndVertex) {
+    using namespace edgar::geometry;
+    using namespace edgar::io;
+    const PolygonGrid2D poly = PolygonGrid2D::get_square(8);
+    std::vector<OrthogonalLineGrid2D> doors;
+    doors.emplace_back(Vector2Int{4, 0}, Vector2Int{5, 0});
+    const auto outline = layout_outline_with_door_gaps(poly, std::move(doors));
+    int gap_ends = 0;
+    for (const auto& pr : outline) {
+        if (!pr.second) {
+            ++gap_ends;
+        }
+    }
+    EXPECT_EQ(gap_ends, 1);
 }
 
 TEST(EdgarConfigSpaces, CompatibleNonOverlapping_twoRects) {

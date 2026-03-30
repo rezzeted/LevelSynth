@@ -8,6 +8,7 @@
 
 #include "edgar/geometry/polygon_grid2d.hpp"
 #include "edgar/geometry/vector2_int.hpp"
+#include "edgar/io/layout_outline_with_door_gaps.hpp"
 
 namespace edgar::io {
 namespace detail {
@@ -48,6 +49,29 @@ inline std::vector<geometry::Vector2Int> world_outline(const geometry::PolygonGr
         w.push_back(p + pos);
     }
     return w;
+}
+
+/// Rasterize one orthogonal segment in grid space (inclusive endpoints), same convention as legacy outline loop.
+inline void rasterize_orthogonal_world_edge(std::vector<std::uint8_t>& rgba, int img_w, int img_h, double scale,
+                                            double ox, double oy, std::uint8_t cr, std::uint8_t cg, std::uint8_t cb,
+                                            geometry::Vector2Int from, geometry::Vector2Int to) {
+    const int dx = (to.x > from.x) - (to.x < from.x);
+    const int dy = (to.y > from.y) - (to.y < from.y);
+    int x = from.x;
+    int y = from.y;
+    while (true) {
+        const int px = static_cast<int>(std::floor(x * scale + ox));
+        const int py = static_cast<int>(std::floor(y * scale + oy));
+        set_pixel(rgba, img_w, img_h, px, py, cr, cg, cb);
+        if (x == to.x && y == to.y) {
+            break;
+        }
+        if (from.x == to.x) {
+            y += dy;
+        } else {
+            x += dx;
+        }
+    }
 }
 
 } // namespace detail
@@ -133,27 +157,23 @@ void DungeonDrawer<TRoom>::draw_layout_and_save(const generator::grid2d::LayoutG
     const auto line_b = static_cast<std::uint8_t>(options.outline_rgb & 0xFF);
 
     for (const auto& room : layout.rooms) {
-        const auto world = detail::world_outline(room.outline, room.position);
-        for (std::size_t i = 0; i < world.size(); ++i) {
-            const auto a = world[i];
-            const auto b = world[(i + 1) % world.size()];
-            const int dx = (b.x > a.x) - (b.x < a.x);
-            const int dy = (b.y > a.y) - (b.y < a.y);
-            int x = a.x;
-            int y = a.y;
-            while (true) {
-                const int px = static_cast<int>(std::floor(x * scale + ox));
-                const int py = static_cast<int>(std::floor(y * scale + oy));
-                detail::set_pixel(rgba, img_w, img_h, px, py, line_r, line_g, line_b);
-                if (x == b.x && y == b.y) {
-                    break;
-                }
-                if (a.x == b.x) {
-                    y += dy;
-                } else {
-                    x += dx;
-                }
+        std::vector<geometry::OrthogonalLineGrid2D> door_lines;
+        door_lines.reserve(room.doors.size());
+        for (const auto& d : room.doors) {
+            door_lines.push_back(d.door_line);
+        }
+        auto outline_local = layout_outline_with_door_gaps(room.outline, std::move(door_lines));
+        if (outline_local.empty()) {
+            continue;
+        }
+        geometry::Vector2Int last = outline_local.back().first + room.position;
+        for (const auto& pr : outline_local) {
+            const geometry::Vector2Int pt = pr.first + room.position;
+            if (pr.second) {
+                detail::rasterize_orthogonal_world_edge(rgba, img_w, img_h, scale, ox, oy, line_r, line_g, line_b,
+                                                        last, pt);
             }
+            last = pt;
         }
     }
 
