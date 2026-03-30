@@ -21,6 +21,7 @@
 #include "edgar/generator/grid2d/room_shapes_handler_grid2d.hpp"
 #include "edgar/generator/common/simulated_annealing_configuration.hpp"
 #include "edgar/io/layout_json.hpp"
+#include "edgar/io/layout_grid_cells.hpp"
 #include "edgar/io/layout_outline_with_door_gaps.hpp"
 #include "edgar/io/png_rgba.hpp"
 #include "edgar/graphs/graph_algorithms.hpp"
@@ -432,6 +433,18 @@ TEST(EdgarIo, LayoutOutlineWithDoorGaps_squareOneDoor_gapEndVertex) {
         }
     }
     EXPECT_EQ(gap_ends, 1);
+}
+
+TEST(EdgarIo, GridCellLatticePoints_rectangle2x2_nineCorners) {
+    using namespace edgar::geometry;
+    using namespace edgar::io;
+    const PolygonGrid2D poly = PolygonGrid2D::get_rectangle(2, 2);
+    const auto pts = grid_cell_lattice_points(poly);
+    EXPECT_EQ(pts.size(), 9u);
+    const auto set = grid_cell_lattice_point_set(pts);
+    EXPECT_TRUE(lattice_set_contains(set, Vector2Int{1, 1}));
+    EXPECT_TRUE(lattice_set_contains(set, Vector2Int{2, 0}));
+    EXPECT_TRUE(lattice_set_contains(set, Vector2Int{0, 2}));
 }
 
 TEST(EdgarConfigSpaces, CompatibleNonOverlapping_twoRects) {

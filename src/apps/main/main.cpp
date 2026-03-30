@@ -510,7 +510,9 @@ int main(int argc, char* argv[])
                     g_layout_index + 1, static_cast<int>(g_layouts.size()),
                     static_cast<int>(shown.rooms.size()), total_doors);
 
-                ImGui::TextUnformatted("Layout preview (corridors in blue):");
+                ImGui::Checkbox("Preview grid lines", &g_preview_grid_lines);
+                ImGui::Checkbox("Preview wall shading", &g_preview_shading);
+                ImGui::TextUnformatted("Layout preview (DungeonDrawer-style fill + walls):");
                 draw_layout_preview_imgui(shown);
             }
             ImGui::EndChild();

@@ -8,6 +8,7 @@
 
 #include "edgar/geometry/polygon_grid2d.hpp"
 #include "edgar/geometry/vector2_int.hpp"
+#include "edgar/io/layout_grid_cells.hpp"
 #include "edgar/io/layout_outline_with_door_gaps.hpp"
 
 namespace edgar::io {
@@ -23,24 +24,6 @@ inline void set_pixel(std::vector<std::uint8_t>& rgba, int w, int h, int x, int 
     rgba[static_cast<std::size_t>(i + 1)] = g;
     rgba[static_cast<std::size_t>(i + 2)] = b;
     rgba[static_cast<std::size_t>(i + 3)] = 255;
-}
-
-inline bool point_in_polygon(geometry::Vector2Int pt, const std::vector<geometry::Vector2Int>& poly) {
-    bool c = false;
-    for (std::size_t i = 0, j = poly.size() - 1; i < poly.size(); j = i++) {
-        const auto& pi = poly[i];
-        const auto& pj = poly[j];
-        if (pj.y == pi.y) {
-            continue;
-        }
-        if (((pi.y > pt.y) != (pj.y > pt.y)) &&
-            (static_cast<double>(pt.x) <
-             static_cast<double>(pj.x - pi.x) * static_cast<double>(pt.y - pi.y) / static_cast<double>(pj.y - pi.y) +
-                 static_cast<double>(pi.x))) {
-            c = !c;
-        }
-    }
-    return c;
 }
 
 inline std::vector<geometry::Vector2Int> world_outline(const geometry::PolygonGrid2D& local, geometry::Vector2Int pos) {
@@ -71,6 +54,65 @@ inline void rasterize_orthogonal_world_edge(std::vector<std::uint8_t>& rgba, int
         } else {
             x += dx;
         }
+    }
+}
+
+/// Two-pixel-thick orthogonal stroke (pairs of adjacent pixels perpendicular to the segment).
+inline void rasterize_orthogonal_world_edge_thick(std::vector<std::uint8_t>& rgba, int img_w, int img_h,
+                                                    double scale, double ox, double oy, std::uint8_t cr,
+                                                    std::uint8_t cg, std::uint8_t cb, geometry::Vector2Int from,
+                                                    geometry::Vector2Int to) {
+    const int dx = (to.x > from.x) - (to.x < from.x);
+    const int dy = (to.y > from.y) - (to.y < from.y);
+    const bool horizontal = (from.y == to.y);
+    int x = from.x;
+    int y = from.y;
+    while (true) {
+        const int px = static_cast<int>(std::floor(x * scale + ox));
+        const int py = static_cast<int>(std::floor(y * scale + oy));
+        set_pixel(rgba, img_w, img_h, px, py, cr, cg, cb);
+        if (horizontal) {
+            set_pixel(rgba, img_w, img_h, px, py + 1, cr, cg, cb);
+        } else {
+            set_pixel(rgba, img_w, img_h, px + 1, py, cr, cg, cb);
+        }
+        if (x == to.x && y == to.y) {
+            break;
+        }
+        if (from.x == to.x) {
+            y += dy;
+        } else {
+            x += dx;
+        }
+    }
+}
+
+/// Dashed stroke in world-grid steps (dash_w on, gap_w off) for internal grid lines.
+inline void rasterize_orthogonal_world_edge_dashed(std::vector<std::uint8_t>& rgba, int img_w, int img_h,
+                                                   double scale, double ox, double oy, std::uint8_t cr,
+                                                   std::uint8_t cg, std::uint8_t cb, geometry::Vector2Int from,
+                                                   geometry::Vector2Int to, int dash_w, int gap_w) {
+    const int dx = (to.x > from.x) - (to.x < from.x);
+    const int dy = (to.y > from.y) - (to.y < from.y);
+    int x = from.x;
+    int y = from.y;
+    int step = 0;
+    const int period = dash_w + gap_w;
+    while (true) {
+        if (period > 0 && step % period < dash_w) {
+            const int px = static_cast<int>(std::floor(x * scale + ox));
+            const int py = static_cast<int>(std::floor(y * scale + oy));
+            set_pixel(rgba, img_w, img_h, px, py, cr, cg, cb);
+        }
+        if (x == to.x && y == to.y) {
+            break;
+        }
+        if (from.x == to.x) {
+            y += dy;
+        } else {
+            x += dx;
+        }
+        ++step;
     }
 }
 
@@ -129,6 +171,37 @@ void DungeonDrawer<TRoom>::draw_layout_and_save(const generator::grid2d::LayoutG
     const auto fill_g = static_cast<std::uint8_t>((options.room_fill_rgb >> 8) & 0xFF);
     const auto fill_b = static_cast<std::uint8_t>(options.room_fill_rgb & 0xFF);
 
+    const auto shade_r = static_cast<std::uint8_t>((options.shade_rgb >> 16) & 0xFF);
+    const auto shade_g = static_cast<std::uint8_t>((options.shade_rgb >> 8) & 0xFF);
+    const auto shade_b = static_cast<std::uint8_t>(options.shade_rgb & 0xFF);
+
+    const auto grid_r = static_cast<std::uint8_t>((options.grid_rgb >> 16) & 0xFF);
+    const auto grid_g = static_cast<std::uint8_t>((options.grid_rgb >> 8) & 0xFF);
+    const auto grid_b = static_cast<std::uint8_t>(options.grid_rgb & 0xFF);
+
+    if (options.enable_shading) {
+        for (const auto& room : layout.rooms) {
+            std::vector<geometry::OrthogonalLineGrid2D> door_lines;
+            door_lines.reserve(room.doors.size());
+            for (const auto& d : room.doors) {
+                door_lines.push_back(d.door_line);
+            }
+            auto outline_local = layout_outline_with_door_gaps(room.outline, std::move(door_lines));
+            if (outline_local.empty()) {
+                continue;
+            }
+            geometry::Vector2Int last = outline_local.back().first + room.position;
+            for (const auto& pr : outline_local) {
+                const geometry::Vector2Int pt = pr.first + room.position;
+                if (pr.second) {
+                    detail::rasterize_orthogonal_world_edge_thick(rgba, img_w, img_h, scale, ox, oy, shade_r,
+                                                                  shade_g, shade_b, last, pt);
+                }
+                last = pt;
+            }
+        }
+    }
+
     for (const auto& room : layout.rooms) {
         const auto world = detail::world_outline(room.outline, room.position);
         int rmin_x = std::numeric_limits<int>::max();
@@ -143,10 +216,30 @@ void DungeonDrawer<TRoom>::draw_layout_and_save(const generator::grid2d::LayoutG
         }
         for (int y = rmin_y; y <= rmax_y; ++y) {
             for (int x = rmin_x; x <= rmax_x; ++x) {
-                if (detail::point_in_polygon({x, y}, world)) {
+                if (point_in_polygon_xy({x, y}, world)) {
                     const int px = static_cast<int>(std::floor(x * scale + ox));
                     const int py = static_cast<int>(std::floor(y * scale + oy));
                     detail::set_pixel(rgba, img_w, img_h, px, py, fill_r, fill_g, fill_b);
+                }
+            }
+        }
+    }
+
+    if (options.enable_grid_lines) {
+        for (const auto& room : layout.rooms) {
+            const geometry::PolygonGrid2D poly_world = room.outline + room.position;
+            const std::vector<geometry::Vector2Int> lattice = grid_cell_lattice_points(poly_world);
+            const auto lattice_set = grid_cell_lattice_point_set(lattice);
+            for (const auto& p : lattice) {
+                const geometry::Vector2Int right{p.x + 1, p.y};
+                const geometry::Vector2Int bottom{p.x, p.y - 1};
+                if (lattice_set_contains(lattice_set, right)) {
+                    detail::rasterize_orthogonal_world_edge_dashed(rgba, img_w, img_h, scale, ox, oy, grid_r, grid_g,
+                                                                   grid_b, p, right, 2, 2);
+                }
+                if (lattice_set_contains(lattice_set, bottom)) {
+                    detail::rasterize_orthogonal_world_edge_dashed(rgba, img_w, img_h, scale, ox, oy, grid_r, grid_g,
+                                                                   grid_b, p, bottom, 2, 2);
                 }
             }
         }
@@ -170,8 +263,8 @@ void DungeonDrawer<TRoom>::draw_layout_and_save(const generator::grid2d::LayoutG
         for (const auto& pr : outline_local) {
             const geometry::Vector2Int pt = pr.first + room.position;
             if (pr.second) {
-                detail::rasterize_orthogonal_world_edge(rgba, img_w, img_h, scale, ox, oy, line_r, line_g, line_b,
-                                                        last, pt);
+                detail::rasterize_orthogonal_world_edge_thick(rgba, img_w, img_h, scale, ox, oy, line_r, line_g,
+                                                                line_b, last, pt);
             }
             last = pt;
         }
