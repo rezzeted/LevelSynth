@@ -45,6 +45,9 @@ struct GraphBasedGeneratorConfiguration {
 
     std::optional<common::SAConfigurationProvider> sa_config_provider{};
 
+    /// C# `GraphBasedGeneratorConfiguration.OptimizeCorridorConstraints`.
+    bool optimize_corridor_constraints = true;
+
     /// C# `SimulatedAnnealingEvolver.Evolve` yield stream (`OnEachLayoutGenerated` emits intermediate layouts).
     LayoutStreamMode layout_stream_mode = LayoutStreamMode::Single;
     int max_layout_yields = 10000;

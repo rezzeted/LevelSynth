@@ -406,6 +406,53 @@ TEST(EdgarEnergy, ConstraintsEvaluator_noOverlapZeroPenalty) {
     EXPECT_DOUBLE_EQ(BasicEnergyUpdater::total_penalty(e), 0.0);
 }
 
+TEST(EdgarEnergy, ConstraintsEvaluator_OverlapOnly) {
+    using namespace edgar::geometry;
+    using namespace edgar::generator::grid2d;
+    using namespace edgar::generator::common;
+    std::vector<PolygonGrid2D> polys = {PolygonGrid2D::get_rectangle(2, 2), PolygonGrid2D::get_rectangle(2, 2)};
+    std::vector<Vector2Int> pos = {{0, 0}, {1, 0}};
+    const EnergyData e = ConstraintsEvaluatorGrid2D::evaluate_pair(0, 1, polys, pos);
+    EXPECT_DOUBLE_EQ(e.overlap_penalty, 1.0);
+    EXPECT_DOUBLE_EQ(e.corridor_penalty, 0.0);
+    EXPECT_DOUBLE_EQ(e.minimum_distance_penalty, 0.0);
+}
+
+TEST(EdgarEnergy, ConstraintsEvaluator_CorridorPenaltyControlledByFlag) {
+    using namespace edgar::geometry;
+    using namespace edgar::generator::grid2d;
+    std::vector<PolygonGrid2D> polys = {PolygonGrid2D::get_rectangle(2, 2), PolygonGrid2D::get_rectangle(2, 2)};
+    std::vector<Vector2Int> pos = {{0, 0}, {1, 0}};
+    std::vector<bool> is_corridor = {false, true};
+    const auto on = ConstraintsEvaluatorGrid2D::evaluate_pair(0, 1, polys, pos, 0, &is_corridor, true);
+    const auto off = ConstraintsEvaluatorGrid2D::evaluate_pair(0, 1, polys, pos, 0, &is_corridor, false);
+    EXPECT_DOUBLE_EQ(on.overlap_penalty, 1.0);
+    EXPECT_DOUBLE_EQ(on.corridor_penalty, 1.0);
+    EXPECT_DOUBLE_EQ(off.overlap_penalty, 1.0);
+    EXPECT_DOUBLE_EQ(off.corridor_penalty, 0.0);
+}
+
+TEST(EdgarEnergy, ConstraintsEvaluator_MinimumDistanceOnly) {
+    using namespace edgar::geometry;
+    using namespace edgar::generator::grid2d;
+    std::vector<PolygonGrid2D> polys = {PolygonGrid2D::get_rectangle(2, 2), PolygonGrid2D::get_rectangle(2, 2)};
+    std::vector<Vector2Int> pos = {{0, 0}, {4, 0}};
+    const auto e = ConstraintsEvaluatorGrid2D::evaluate_pair(0, 1, polys, pos, 4);
+    EXPECT_DOUBLE_EQ(e.overlap_penalty, 0.0);
+    EXPECT_DOUBLE_EQ(e.corridor_penalty, 0.0);
+    EXPECT_DOUBLE_EQ(e.minimum_distance_penalty, 0.5);
+}
+
+TEST(EdgarEnergy, BasicEnergyUpdater_AppliesScale) {
+    using namespace edgar::generator::common;
+    EnergyData e;
+    e.overlap_penalty = 1.0;
+    e.corridor_penalty = 2.0;
+    e.minimum_distance_penalty = 3.0;
+    EXPECT_DOUBLE_EQ(BasicEnergyUpdater::total_penalty(e), 6.0);
+    EXPECT_DOUBLE_EQ(BasicEnergyUpdater::total_penalty(e, 10.0), 60.0);
+}
+
 TEST(EdgarEnergy, Incident_to_room_sumMatchesTwiceTotal) {
     using namespace edgar::geometry;
     using namespace edgar::generator::grid2d;

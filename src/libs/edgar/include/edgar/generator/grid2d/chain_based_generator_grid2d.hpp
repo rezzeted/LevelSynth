@@ -92,7 +92,8 @@ public:
         auto penalty_total = [&](const std::vector<geometry::PolygonGrid2D>& ol,
                                  const std::vector<geometry::Vector2Int>& pos) {
             return common::BasicEnergyUpdater::total_penalty(
-                ConstraintsEvaluatorGrid2D::evaluate(ol, pos, level.minimum_room_distance, &is_corridor_flags));
+                ConstraintsEvaluatorGrid2D::evaluate(ol, pos, level.minimum_room_distance, &is_corridor_flags,
+                                                     level.optimize_corridor_constraints));
         };
 
         const int max_layout_restarts =

@@ -57,6 +57,7 @@ template <typename TRoom>
 LayoutGrid2D<TRoom> GraphBasedGeneratorGrid2D<TRoom>::generate_layout() {
     const auto t0 = std::chrono::steady_clock::now();
     iterations_count_ = 0;
+    level_.optimize_corridor_constraints = configuration_.optimize_corridor_constraints;
 
     std::mt19937 rng = rng_.has_value() ? *rng_ : std::mt19937{std::random_device{}()};
 

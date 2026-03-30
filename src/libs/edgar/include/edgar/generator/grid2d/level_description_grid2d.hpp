@@ -18,6 +18,7 @@ class LevelDescriptionGrid2D {
 public:
     std::string name;
     int minimum_room_distance = 0;
+    bool optimize_corridor_constraints = true;
     std::optional<RoomTemplateRepeatMode> room_template_repeat_mode_default = RoomTemplateRepeatMode::NoRepeat;
     std::optional<RoomTemplateRepeatMode> room_template_repeat_mode_override;
 

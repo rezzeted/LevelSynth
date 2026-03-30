@@ -191,7 +191,7 @@ public:
                         positions[static_cast<std::size_t>(room_index)] = cand_pos;
                         auto energy_data = ConstraintsEvaluatorGrid2D::incident_to_room(
                             static_cast<std::size_t>(room_index), outlines, positions,
-                            level.minimum_room_distance, &is_corridor);
+                            level.minimum_room_distance, &is_corridor, level.optimize_corridor_constraints);
                         double penalty = common::BasicEnergyUpdater::total_penalty(energy_data);
 
                         if (penalty < best_energy) {
@@ -219,7 +219,7 @@ public:
                         outlines[static_cast<std::size_t>(room_index)] = outline;
                         auto energy_data = ConstraintsEvaluatorGrid2D::incident_to_room(
                             static_cast<std::size_t>(room_index), outlines, positions,
-                            level.minimum_room_distance, &is_corridor);
+                            level.minimum_room_distance, &is_corridor, level.optimize_corridor_constraints);
                         double penalty = common::BasicEnergyUpdater::total_penalty(energy_data);
 
                         if (penalty < best_energy) {
@@ -307,7 +307,8 @@ public:
         }
         auto eval_full = [&]() {
             return ConstraintsEvaluatorGrid2D::evaluate(
-                outlines, positions, level.minimum_room_distance, &is_corridor);
+                outlines, positions, level.minimum_room_distance, &is_corridor,
+                level.optimize_corridor_constraints);
         };
         if (eval_full().is_valid()) {
             return true;
@@ -389,18 +390,11 @@ public:
             return tab;
         };
 
-        auto energy = [&]() {
-            return common::BasicEnergyUpdater::total_penalty(ConstraintsEvaluatorGrid2D::evaluate(
-                outlines, positions, level.minimum_room_distance, &is_corridor));
-        };
-
         auto overlap_total = [&]() {
             return ConstraintsEvaluatorGrid2D::evaluate(
-                outlines, positions, level.minimum_room_distance, &is_corridor).overlap_penalty;
+                outlines, positions, level.minimum_room_distance, &is_corridor,
+                level.optimize_corridor_constraints).overlap_penalty;
         };
-
-        double e = energy();
-        double total_overlap = overlap_total();
 
         constexpr double p0 = 0.2;
         constexpr double p1 = 0.01;
@@ -454,6 +448,17 @@ public:
         };
 
         double avg_size = compute_average_room_size(level, rmap);
+        const double energy_scale = std::max(1.0, 10.0 * avg_size);
+
+        auto energy = [&]() {
+            return common::BasicEnergyUpdater::total_penalty(
+                ConstraintsEvaluatorGrid2D::evaluate(outlines, positions, level.minimum_room_distance, &is_corridor,
+                                                     level.optimize_corridor_constraints),
+                energy_scale);
+        };
+
+        double e = energy();
+        double total_overlap = overlap_total();
 
         struct RoomSnapshot {
             geometry::Vector2Int center;
@@ -566,8 +571,9 @@ public:
 
                 const common::EnergyData incident_old =
                     ConstraintsEvaluatorGrid2D::incident_to_room(static_cast<std::size_t>(r), outlines, positions,
-                                                                 level.minimum_room_distance, &is_corridor);
-                const double incident_old_tot = common::BasicEnergyUpdater::total_penalty(incident_old);
+                                                                 level.minimum_room_distance, &is_corridor,
+                                                                 level.optimize_corridor_constraints);
+                const double incident_old_tot = common::BasicEnergyUpdater::total_penalty(incident_old, energy_scale);
 
 #ifndef NDEBUG
                 if (iterations % 256 == 0) {
@@ -633,9 +639,10 @@ public:
 
                 const common::EnergyData incident_new =
                     ConstraintsEvaluatorGrid2D::incident_to_room(static_cast<std::size_t>(r), outlines, positions,
-                                                                 level.minimum_room_distance, &is_corridor);
+                                                                 level.minimum_room_distance, &is_corridor,
+                                                                 level.optimize_corridor_constraints);
                 const double new_e =
-                    e - incident_old_tot + common::BasicEnergyUpdater::total_penalty(incident_new);
+                    e - incident_old_tot + common::BasicEnergyUpdater::total_penalty(incident_new, energy_scale);
                 const double energy_delta = new_e - e;
 
                 // C# order: IsLayoutValid -> IsDifferentEnough -> TryCompleteChain on clone -> yield
@@ -671,7 +678,9 @@ public:
                             }
                             const double pen_after =
                                 common::BasicEnergyUpdater::total_penalty(ConstraintsEvaluatorGrid2D::evaluate(
-                                    cl.outlines, cl.positions, level.minimum_room_distance, &is_corridor));
+                                    cl.outlines, cl.positions, level.minimum_room_distance, &is_corridor,
+                                    level.optimize_corridor_constraints),
+                                    energy_scale);
                             if (tcc_ok) {
                                 yielded_snapshots.push_back(std::move(snap));
                                 emit_sa(LayoutYieldEvent::LayoutGenerated, cl, pen_after);

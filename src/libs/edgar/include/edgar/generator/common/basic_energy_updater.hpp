@@ -6,8 +6,8 @@ namespace edgar::generator::common {
 
 /// Maps `EnergyData` to a scalar for minimization (C# `BasicEnergyUpdater` subset).
 struct BasicEnergyUpdater {
-    static double total_penalty(const EnergyData& e) {
-        return e.overlap_penalty + e.corridor_penalty + e.minimum_distance_penalty;
+    static double total_penalty(const EnergyData& e, double energy_scale = 1.0) {
+        return energy_scale * (e.overlap_penalty + e.corridor_penalty + e.minimum_distance_penalty);
     }
 };
 

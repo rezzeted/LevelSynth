@@ -1,9 +1,10 @@
 #pragma once
 
+#include "edgar/generator/grid2d/constraints/basic_constraint_grid2d.hpp"
+#include "edgar/generator/grid2d/constraints/corridor_constraint_grid2d.hpp"
+#include "edgar/generator/grid2d/constraints/minimum_distance_constraint_grid2d.hpp"
 #include "edgar/generator/common/energy_data.hpp"
-#include "edgar/geometry/overlap.hpp"
 #include "edgar/geometry/polygon_grid2d.hpp"
-#include "edgar/geometry/rectangle_grid2d.hpp"
 #include "edgar/geometry/vector2_int.hpp"
 
 #include <algorithm>
@@ -20,25 +21,18 @@ public:
                                             const std::vector<geometry::PolygonGrid2D>& outlines,
                                             const std::vector<geometry::Vector2Int>& positions,
                                             int minimum_room_distance = 0,
-                                            const std::vector<bool>* is_corridor = nullptr) {
+                                            const std::vector<bool>* is_corridor = nullptr,
+                                            bool optimize_corridor_constraints = true) {
         common::EnergyData out;
-        const bool overlap =
-            geometry::polygons_overlap_area(outlines[i], positions[i], outlines[j], positions[j]);
-        if (overlap) {
-            out.overlap_penalty += 1.0;
-            if (is_corridor != nullptr && (*is_corridor)[i] != (*is_corridor)[j]) {
-                out.corridor_penalty += 1.0;
-            }
-        }
-        if (minimum_room_distance > 0) {
-            const geometry::RectangleGrid2D ra = outlines[i].bounding_rectangle() + positions[i];
-            const geometry::RectangleGrid2D rb = outlines[j].bounding_rectangle() + positions[j];
-            const int d = axis_aligned_rect_min_distance(ra, rb);
-            if (d < minimum_room_distance) {
-                out.minimum_distance_penalty +=
-                    static_cast<double>(minimum_room_distance - d) / static_cast<double>(minimum_room_distance);
-            }
-        }
+        const common::EnergyData basic =
+            constraints::BasicConstraintGrid2D::evaluate_pair(i, j, outlines, positions);
+        const common::EnergyData corridor = constraints::CorridorConstraintGrid2D::evaluate_pair(
+            i, j, basic, is_corridor, optimize_corridor_constraints);
+        const common::EnergyData min_distance = constraints::MinimumDistanceConstraintGrid2D::evaluate_pair(
+            i, j, outlines, positions, minimum_room_distance);
+        out.overlap_penalty += basic.overlap_penalty;
+        out.corridor_penalty += corridor.corridor_penalty;
+        out.minimum_distance_penalty += min_distance.minimum_distance_penalty;
         return out;
     }
 
@@ -46,7 +40,8 @@ public:
     static common::EnergyData incident_to_room(std::size_t r, const std::vector<geometry::PolygonGrid2D>& outlines,
                                                const std::vector<geometry::Vector2Int>& positions,
                                                int minimum_room_distance = 0,
-                                               const std::vector<bool>* is_corridor = nullptr) {
+                                               const std::vector<bool>* is_corridor = nullptr,
+                                               bool optimize_corridor_constraints = true) {
         common::EnergyData out;
         for (std::size_t j = 0; j < outlines.size(); ++j) {
             if (j == r) {
@@ -55,7 +50,8 @@ public:
             const std::size_t a = std::min(r, j);
             const std::size_t b = std::max(r, j);
             const common::EnergyData p =
-                evaluate_pair(a, b, outlines, positions, minimum_room_distance, is_corridor);
+                evaluate_pair(a, b, outlines, positions, minimum_room_distance, is_corridor,
+                              optimize_corridor_constraints);
             out.overlap_penalty += p.overlap_penalty;
             out.corridor_penalty += p.corridor_penalty;
             out.minimum_distance_penalty += p.minimum_distance_penalty;
@@ -66,26 +62,20 @@ public:
     static common::EnergyData evaluate(const std::vector<geometry::PolygonGrid2D>& outlines,
                                        const std::vector<geometry::Vector2Int>& positions,
                                        int minimum_room_distance = 0,
-                                       const std::vector<bool>* is_corridor = nullptr) {
+                                       const std::vector<bool>* is_corridor = nullptr,
+                                       bool optimize_corridor_constraints = true) {
         common::EnergyData out;
         for (std::size_t i = 0; i < outlines.size(); ++i) {
             for (std::size_t j = i + 1; j < outlines.size(); ++j) {
                 const common::EnergyData p =
-                    evaluate_pair(i, j, outlines, positions, minimum_room_distance, is_corridor);
+                    evaluate_pair(i, j, outlines, positions, minimum_room_distance, is_corridor,
+                                  optimize_corridor_constraints);
                 out.overlap_penalty += p.overlap_penalty;
                 out.corridor_penalty += p.corridor_penalty;
                 out.minimum_distance_penalty += p.minimum_distance_penalty;
             }
         }
         return out;
-    }
-
-private:
-    static int axis_aligned_rect_min_distance(const geometry::RectangleGrid2D& ra,
-                                              const geometry::RectangleGrid2D& rb) {
-        const int dx = std::max(0, std::max(ra.a.x - rb.b.x, rb.a.x - ra.b.x));
-        const int dy = std::max(0, std::max(ra.a.y - rb.b.y, rb.a.y - ra.b.y));
-        return dx + dy;
     }
 };
 
