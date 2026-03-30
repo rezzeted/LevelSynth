@@ -43,7 +43,7 @@
 ### 3.2 Упрощено или иная архитектура
 
 - **Энергия и ограничения:** в C# — `BasicConstraint`, `CorridorConstraint`, `MinimumDistanceConstraint` и общий `ConstraintsEvaluator`. В порте теперь есть такая же **композиция вкладов** (basic/corridor/min-distance) через фасад `ConstraintsEvaluatorGrid2D`; добавлен флаг `optimize_corridor_constraints` и масштабирование `BasicEnergyUpdater` (по смыслу `10 * averageSize` в цепочке SA).
-- **Simulated annealing:** общая идея (schedule, Metropolis, циклы/триалы) совпадает; в C# возмущение завязано на **layout controller** и **выбор из configuration spaces**. В порте в конфиге явно указано расхождение: вариант с **`max_perturbation_radius`** (сетка сдвигов) вместо полного сэмплинг из КП как в C#. Упрощённый путь в `SimulatedAnnealingEvolverGrid2D::evolve` — случайный сдвиг позиции комнаты.
+- **Simulated annealing:** общая идея (schedule, Metropolis, циклы/триалы) совпадает; основной path в порте теперь также идёт через **layout controller + sampling из configuration spaces**. `max_perturbation_radius` оставлен как управляемый fallback-тюнинг, а `SimulatedAnnealingEvolverGrid2D::evolve` сохранён как legacy random-walk режим.
 - **Выбор формы комнаты** и repeat mode: в C# — `RoomShapesHandler` и mapping; в порте теперь есть отдельный `RoomShapesHandlerGrid2D`, который централизует выбор шаблона/трансформации, repeat policy и alias, но без полного parity по внутренним C# типам.
 
 ### 3.3 Отсутствует в порте (ядро)

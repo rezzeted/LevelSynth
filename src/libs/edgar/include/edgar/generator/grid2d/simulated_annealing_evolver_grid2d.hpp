@@ -14,8 +14,8 @@
 
 namespace edgar::generator::grid2d {
 
-/// C# `GraphBasedGenerator.Common.SimulatedAnnealingEvolver` — cycles × trials, t0/t1 schedule, Metropolis on
-/// `energyDelta` / `deltaEAvg` (Grid2D: total constraint penalty; no `ILayout` / corridor stage-two).
+/// Legacy random-walk SA evolver (dx/dy perturbations only).
+/// Main Grid2D pipeline uses `LayoutControllerGrid2D` with configuration-space-first perturbation.
 class SimulatedAnnealingEvolverGrid2D {
 public:
     explicit SimulatedAnnealingEvolverGrid2D(common::SimulatedAnnealingConfiguration config = {})

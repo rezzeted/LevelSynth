@@ -11,6 +11,12 @@ void SimulatedAnnealingEvolverGrid2D::evolve(std::vector<geometry::PolygonGrid2D
         }
         return;
     }
+    if (!config_.enable_random_walk_fallback || config_.max_perturbation_radius <= 0) {
+        if (iterations_out) {
+            *iterations_out = 0;
+        }
+        return;
+    }
 
     int iterations = 0;
     int last_success_iteration = 0;

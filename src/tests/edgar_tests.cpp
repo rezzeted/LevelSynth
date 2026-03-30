@@ -29,6 +29,7 @@
 #include "edgar/geometry/polygon_overlap_grid2d.hpp"
 #include "edgar/detail/xorshift64star.hpp"
 #include "edgar/generator/grid2d/layout_door_computation.hpp"
+#include "edgar/generator/grid2d/simulated_annealing_evolver_grid2d.hpp"
 #include "edgar/generator/grid2d/simple_door_mode_grid2d.hpp"
 
 TEST(EdgarChainDecomposition, BreadthFirstOld_CoversAllVertices_TwoGraphs) {
@@ -964,6 +965,103 @@ TEST(EdgarSA, IsDifferentEnough_yieldsDistinctLayouts) {
             EXPECT_TRUE(any_different) << "Yielded layouts " << i << " and " << j << " are identical";
         }
     }
+}
+
+TEST(EdgarSA, DeterministicEventSequence_SameSeed) {
+    using namespace edgar;
+    using namespace edgar::generator::grid2d;
+    using namespace edgar::generator::common;
+
+    auto square = RoomTemplateGrid2D(edgar::geometry::PolygonGrid2D::get_square(8),
+                                     std::make_shared<SimpleDoorModeGrid2D>(1, 1));
+    RoomDescriptionGrid2D room_desc(false, {square});
+
+    LevelDescriptionGrid2D<int> level;
+    level.add_room(0, room_desc);
+    level.add_room(1, room_desc);
+    level.add_room(2, room_desc);
+    level.add_room(3, room_desc);
+    level.add_connection(0, 1);
+    level.add_connection(0, 3);
+    level.add_connection(1, 2);
+    level.add_connection(2, 3);
+
+    SimulatedAnnealingConfiguration cfg;
+    cfg.cycles = 8;
+    cfg.trials_per_cycle = 20;
+    cfg.max_stage_two_failures = 100000;
+    cfg.max_cs_perturbation_checks = 64;
+
+    auto run_once = [&](int seed) {
+        std::vector<int> events;
+        ChainGenerateContext<int> ctx;
+        ctx.layout_stream = LayoutStreamMode::OnEachSaTryCompleteChain;
+        ctx.max_layout_yields = 50;
+        ctx.on_layout = [&](const LayoutYieldInfo& info, const LayoutGrid2D<int>&) {
+            events.push_back(static_cast<int>(info.event_type));
+        };
+        std::mt19937 rng(seed);
+        auto res = ChainBasedGeneratorGrid2D<int>::generate(
+            level, cfg, rng, ChainDecompositionStrategy::breadth_first_old, {}, &ctx);
+        return std::pair{res.layout, events};
+    };
+
+    auto [layout_a, events_a] = run_once(12345);
+    auto [layout_b, events_b] = run_once(12345);
+    ASSERT_EQ(events_a, events_b);
+    ASSERT_EQ(layout_a.rooms.size(), layout_b.rooms.size());
+    for (std::size_t i = 0; i < layout_a.rooms.size(); ++i) {
+        EXPECT_EQ(layout_a.rooms[i].room, layout_b.rooms[i].room);
+        EXPECT_EQ(layout_a.rooms[i].position.x, layout_b.rooms[i].position.x);
+        EXPECT_EQ(layout_a.rooms[i].position.y, layout_b.rooms[i].position.y);
+    }
+}
+
+TEST(EdgarSA, PerturbSample_PositionLiesOnConfigurationSpace) {
+    using namespace edgar::generator::grid2d;
+    using namespace edgar::geometry;
+
+    const auto moving = PolygonGrid2D::get_square(8);
+    const auto fixed = PolygonGrid2D::get_square(8);
+    SimpleDoorModeGrid2D mode(1, 1);
+    const auto moving_doors = mode.get_doors(moving);
+    const auto fixed_doors = mode.get_doors(fixed);
+
+    std::vector<PolygonGrid2D> outlines = {moving, fixed};
+    std::vector<Vector2Int> positions = {{0, 0}, {20, 0}};
+    std::vector<std::vector<DoorLineGrid2D>> all_doors = {moving_doors, fixed_doors};
+    std::vector<bool> placed = {true, true};
+    std::vector<int> neighbors = {1};
+    std::mt19937 rng(42);
+
+    const auto sampled = sample_maximum_intersection_position(
+        moving, moving_doors, neighbors, 0, outlines, positions, all_doors, placed, rng, 120);
+    ASSERT_TRUE(sampled.has_value());
+
+    const auto space = ConfigurationSpacesGrid2D::configuration_space_between(moving, moving_doors, fixed, fixed_doors);
+    const Vector2Int offset{sampled->x - positions[1].x, sampled->y - positions[1].y};
+    EXPECT_TRUE(offset_on_configuration_space(offset, space));
+}
+
+TEST(EdgarSA, LegacyRandomWalkEvolver_DisabledByConfig) {
+    using namespace edgar::generator::grid2d;
+    using namespace edgar::generator::common;
+    using namespace edgar::geometry;
+
+    SimulatedAnnealingConfiguration cfg;
+    cfg.enable_random_walk_fallback = false;
+    cfg.max_perturbation_radius = 6;
+
+    SimulatedAnnealingEvolverGrid2D evolver(cfg);
+    std::vector<PolygonGrid2D> outlines = {PolygonGrid2D::get_square(8)};
+    std::vector<Vector2Int> positions = {{10, 10}};
+    std::mt19937 rng(7);
+    int iters = -1;
+    evolver.evolve(outlines, positions, rng, &iters);
+
+    EXPECT_EQ(iters, 0);
+    EXPECT_EQ(positions[0].x, 10);
+    EXPECT_EQ(positions[0].y, 10);
 }
 
 TEST(EdgardDoors, ComputeLayoutDoors_populatesDoorsForConnectedRooms) {

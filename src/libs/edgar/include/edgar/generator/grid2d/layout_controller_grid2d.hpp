@@ -627,7 +627,8 @@ public:
                     if (!neigh.empty() && !my_doors.empty()) {
                         const auto np = sample_maximum_intersection_position(
                             outlines[static_cast<std::size_t>(r)], my_doors, neigh, r, outlines, positions,
-                            doors_tab, placed, rng, 160, is_corridor[static_cast<std::size_t>(r)], &is_corridor);
+                            doors_tab, placed, rng, static_cast<std::size_t>(std::max(1, config_.max_cs_perturbation_checks)),
+                            is_corridor[static_cast<std::size_t>(r)], &is_corridor);
                         if (np.has_value()) {
                             positions[static_cast<std::size_t>(r)] = *np;
                         }
@@ -642,14 +643,15 @@ public:
                     if (!neigh.empty() && !my_doors.empty()) {
                         const auto np = sample_maximum_intersection_position(
                             outlines[static_cast<std::size_t>(r)], my_doors, neigh, r, outlines, positions,
-                            doors_tab, placed, rng, 160, is_corridor[static_cast<std::size_t>(r)], &is_corridor);
+                            doors_tab, placed, rng, static_cast<std::size_t>(std::max(1, config_.max_cs_perturbation_checks)),
+                            is_corridor[static_cast<std::size_t>(r)], &is_corridor);
                         if (np.has_value()) {
                             positions[static_cast<std::size_t>(r)] = *np;
-                        } else {
+                        } else if (config_.enable_random_walk_fallback && config_.max_perturbation_radius > 0) {
                             positions[static_cast<std::size_t>(r)] = {
                                 old_pos.x + pick_dx(rng), old_pos.y + pick_dy(rng)};
                         }
-                    } else {
+                    } else if (config_.enable_random_walk_fallback && config_.max_perturbation_radius > 0) {
                         positions[static_cast<std::size_t>(r)] = {
                             old_pos.x + pick_dx(rng), old_pos.y + pick_dy(rng)};
                     }
