@@ -31,6 +31,8 @@
 
 В порт добавлен **альтернативный бэкенд** `strip_packing` в `GraphBasedGeneratorGrid2D` — горизонтальная укладка без SA; в оригинале как отдельный основной путь не выделен.
 
+**Интеграция и матрица тестов (итерация 7):** для каждого файла `*Tests.cs` из матрицы итерации 0 зафиксирован статус (`done`, `blocked (N)` по роадмапу, `skip (na)` для вне скоупа ядра) в [`test_matrix_iteration0.md`](test_matrix_iteration0.md). Интеграционные сценарии в духе `Edgar.IntegrationTests` / `DungeonGeneratorTests` покрываются suite `EdgarIntegration` в `edgar_tests.cpp` (полный класс `DungeonGenerator` из C# не портируется 1:1). Опциональный ручной замер производительности — `tools/benchmark_layout_generation.ps1` (порог для CI не задан).
+
 **Конвертер layout (итерация 6):** `BasicLayoutConverterGrid2D` в `basic_layout_converter_grid2d.hpp` — граница между внутренним `Grid2DLayoutState` и публичным `LayoutGrid2D`: `convert(state)` (предусловие: все слоты `templates[i]` заданы, как раньше у `to_layout_grid`); опционально `convert(state, add_doors, rng)` через существующий `compute_layout_doors` и `level->get_graph()`. `Grid2DLayoutState::to_layout_grid()` делегирует в `BasicLayoutConverterGrid2D::convert`. Для strip-пути используется `make_room(...)` для того же набора полей `LayoutRoomGrid2D`, что и при конвертации из состояния. Полный C#-конвертер (`BasicLayoutConverterGrid2D.cs`) также учитывает IntAlias/случайные трансформации из mapping — в порте это не воспроизведено в рамках MVP.
 
 ---

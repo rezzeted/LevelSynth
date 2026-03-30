@@ -119,6 +119,8 @@
 
 ## Итерация 7 — Интеграция и перфоманс
 
+**Статус:** реализовано — матрица итерации 0 закрыта колонкой `status` в [`test_matrix_iteration0.md`](test_matrix_iteration0.md) (done / `blocked (N)` / `skip (na)`); интеграционные инварианты pipeline в `EdgarIntegration.DungeonGenerator_*` ([`edgar_tests.cpp`](../src/tests/edgar_tests.cpp)); ручной perf-smoke: [`tools/benchmark_layout_generation.ps1`](../tools/benchmark_layout_generation.ps1) (без порога в CI).
+
 - Портировать ключевые `Edgar.IntegrationTests` по мере необходимости.
 - Опционально: слой performance-тестов на эталонных картах.
 - Закрыть матрицу из итерации 0.
@@ -128,6 +130,8 @@
 - Перенос **ключевых** `Edgar.IntegrationTests`: `DungeonGeneratorTests`, сценарии с полным pipeline (по возможности — те же входные `MapDescription`/уровни).
 - Закрытие **матрицы** из итерации 0: все строки «C# тест → C++ тест» имеют статус done или явный `SKIP` с причиной.
 - **Performance (опционально):** отдельная цель или скрипт — время генерации на 1–2 эталонных пресетах не хуже базового порога (регрессия при оптимизациях).
+
+Покрытие: `EdgarIntegration.DungeonGenerator_pathGraph_pipelineNoOverlap`, `DungeonGenerator_branchGraph_pipelineNoOverlap`, `DungeonGenerator_sameSeedDeterministicLayoutJson`.
 
 ---
 

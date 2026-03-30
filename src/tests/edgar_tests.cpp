@@ -178,6 +178,19 @@ bool partition_matches_any(const std::vector<edgar::geometry::RectangleGrid2D>& 
     return false;
 }
 
+bool layout_int_no_pairwise_overlap(const edgar::generator::grid2d::LayoutGrid2D<int>& layout) {
+    using edgar::geometry::polygons_overlap_area;
+    for (std::size_t i = 0; i < layout.rooms.size(); ++i) {
+        for (std::size_t j = i + 1; j < layout.rooms.size(); ++j) {
+            if (polygons_overlap_area(layout.rooms[i].outline, layout.rooms[i].position, layout.rooms[j].outline,
+                                      layout.rooms[j].position)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 } // namespace
 
 TEST(EdgarGeometry, BipartiteVertexCover_Basic) {
@@ -828,6 +841,88 @@ TEST(EdgarLayoutConverter, BasicLayoutConverter_makeRoom_stripParity) {
     EXPECT_EQ(r.position.x, 1);
     EXPECT_EQ(r.position.y, 2);
     EXPECT_FALSE(r.is_corridor);
+}
+
+// Integration-style invariants aligned with upstream Edgar.IntegrationTests / DungeonGeneratorTests (full Grid2D
+// pipeline: level + graph-based generator, no 1:1 C# API).
+TEST(EdgarIntegration, DungeonGenerator_pathGraph_pipelineNoOverlap) {
+    using namespace edgar;
+    using namespace edgar::generator::grid2d;
+
+    auto square = RoomTemplateGrid2D(edgar::geometry::PolygonGrid2D::get_square(8),
+                                     std::make_shared<SimpleDoorModeGrid2D>(1, 1));
+    RoomDescriptionGrid2D room_desc(false, {square});
+
+    LevelDescriptionGrid2D<int> level;
+    for (int i = 0; i < 5; ++i) {
+        level.add_room(i, room_desc);
+    }
+    for (int i = 0; i < 4; ++i) {
+        level.add_connection(i, i + 1);
+    }
+
+    GraphBasedGeneratorGrid2D<int> generator(level);
+    std::mt19937 rng(32100);
+    generator.inject_random_generator(std::move(rng));
+    const auto layout = generator.generate_layout();
+
+    ASSERT_EQ(layout.rooms.size(), 5u);
+    EXPECT_TRUE(layout_int_no_pairwise_overlap(layout));
+}
+
+TEST(EdgarIntegration, DungeonGenerator_branchGraph_pipelineNoOverlap) {
+    using namespace edgar;
+    using namespace edgar::generator::grid2d;
+
+    auto square = RoomTemplateGrid2D(edgar::geometry::PolygonGrid2D::get_square(8),
+                                     std::make_shared<SimpleDoorModeGrid2D>(1, 1));
+    RoomDescriptionGrid2D room_desc(false, {square});
+
+    LevelDescriptionGrid2D<int> level;
+    for (int i = 0; i < 5; ++i) {
+        level.add_room(i, room_desc);
+    }
+    level.add_connection(0, 1);
+    level.add_connection(1, 2);
+    level.add_connection(2, 3);
+    level.add_connection(2, 4);
+
+    GraphBasedGeneratorGrid2D<int> generator(level);
+    std::mt19937 rng(318);
+    generator.inject_random_generator(std::move(rng));
+    const auto layout = generator.generate_layout();
+
+    ASSERT_EQ(layout.rooms.size(), 5u);
+    EXPECT_TRUE(layout_int_no_pairwise_overlap(layout));
+}
+
+TEST(EdgarIntegration, DungeonGenerator_sameSeedDeterministicLayoutJson) {
+    using namespace edgar;
+    using namespace edgar::generator::grid2d;
+    using edgar::io::layout_to_json;
+
+    auto square = RoomTemplateGrid2D(edgar::geometry::PolygonGrid2D::get_square(8),
+                                     std::make_shared<SimpleDoorModeGrid2D>(1, 1));
+    RoomDescriptionGrid2D room_desc(false, {square});
+
+    LevelDescriptionGrid2D<int> level;
+    for (int i = 0; i < 4; ++i) {
+        level.add_room(i, room_desc);
+    }
+    level.add_connection(0, 1);
+    level.add_connection(1, 2);
+    level.add_connection(2, 3);
+    level.add_connection(3, 0);
+
+    GraphBasedGeneratorGrid2D<int> gen1(level);
+    gen1.inject_random_generator(std::mt19937(4242));
+    const auto lay1 = gen1.generate_layout();
+
+    GraphBasedGeneratorGrid2D<int> gen2(level);
+    gen2.inject_random_generator(std::mt19937(4242));
+    const auto lay2 = gen2.generate_layout();
+
+    EXPECT_EQ(layout_to_json(lay1).dump(), layout_to_json(lay2).dump());
 }
 
 TEST(EdgarIo, LoadImageRgba_missingFile) {

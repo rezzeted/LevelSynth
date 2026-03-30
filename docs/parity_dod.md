@@ -11,6 +11,7 @@
 | **D5** | **Configuration spaces:** непустота КП / совместимые позиции в базовых кейсах | `EdgarConfigSpaces.ConfigurationSpacesGenerator_nonEmptyForMatchingSquares`, `CompatibleNonOverlapping_twoRects` в `edgar_tests.cpp`; блок `EdgarConfigSpace::*` в `edgar_parity_tests.cpp` |
 | **D6** | **Точечный численный контакт** с C# (одна из геометрических процедур) | `EdgarGeometry.OverlapAlongLine_TwoRectsMatchCsharp` в `edgar_tests.cpp` |
 | **D7** | Публичный `LayoutGrid2D` собирается через **конвертер** из `Grid2DLayoutState` (идемпотентность, опционально двери) | `EdgarLayoutConverter.BasicLayoutConverter_*` в `edgar_tests.cpp` |
+| **D8** | **Матрица** C#→C++ ([`test_matrix_iteration0.md`](test_matrix_iteration0.md)) закрыта статусами; интеграционный pipeline без overlap / детерминизм JSON | колонка `status` в матрице; `EdgarIntegration.DungeonGenerator_*` в `edgar_tests.cpp` |
 
 ## Эталонные сценарии для D2/D3 (имена `TEST`)
 
@@ -43,5 +44,13 @@
 | `BasicLayoutConverterGrid2D.Convert(ILayout, addDoors)` | `BasicLayoutConverterGrid2D::convert` / `convert(..., add_doors, rng)`; без полного паритета по alias/случайным трансформациям из mapping |
 
 Тесты: `EdgarLayoutConverter::*` в `edgar_tests.cpp`.
+
+## Итерация 7 — интеграция и матрица
+
+| C# | C++ |
+|----|-----|
+| `Edgar.IntegrationTests` / `DungeonGeneratorTests` (инварианты pipeline) | `EdgarIntegration.DungeonGenerator_*`; полного класса `DungeonGenerator` в порте нет |
+
+Ручной замер времени (не CI-gate): `tools/benchmark_layout_generation.ps1`.
 
 См. также: [test_matrix_iteration0.md](test_matrix_iteration0.md), [port_parity_roadmap.md](port_parity_roadmap.md).
